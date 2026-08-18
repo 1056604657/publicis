@@ -1,0 +1,84 @@
+# dev 环境 overlay
+# 开发人员使用：轻量、单副本、无 HPA、无 PDB、无 PriorityClass、集群内 DB/Redis
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: marriott-dev
+
+resources:
+  - ../../base
+  - namespace.yaml
+
+# dev 环境用 latest 镜像，快速迭代
+images:
+  - name: hub-sh.aijidou.com/base/marriott-backend
+    newTag: latest-amd64
+  - name: hub-sh.aijidou.com/base/marriott-frontend
+    newTag: latest-amd64
+
+# 开发环境密码：用 secretGenerator 生成（开发密码，不敏感）
+# 生产环境不这样，用 ExternalSecret 从 KMS 拉取
+secretGenerator:
+  - name: app-secrets
+    literals:
+      - DB_USER=app
+      - DB_PASSWORD=dev_password_123
+
+# dev 环境：单副本
+replicas:
+  - name: backend
+    count: 1
+  - name: frontend
+    count: 1
+
+patches:
+  # 删除 HPA（开发不需要扩缩容）
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: backend-hpa
+    patch: |-
+      $patch: delete
+      apiVersion: autoscaling/v2
+      kind: HorizontalPodAutoscaler
+      metadata:
+        name: backend-hpa
+  # 删除 PDB（开发环境单副本，不需要）
+  - target:
+      kind: PodDisruptionBudget
+      name: backend-pdb
+    patch: |-
+      $patch: delete
+      apiVersion: policy/v1
+      kind: PodDisruptionBudget
+      metadata:
+        name: backend-pdb
+  - target:
+      kind: PodDisruptionBudget
+      name: frontend-pdb
+    patch: |-
+      $patch: delete
+      apiVersion: policy/v1
+      kind: PodDisruptionBudget
+      metadata:
+        name: frontend-pdb
+  # 删除 PriorityClass（开发环境不需要优先级）
+  - target:
+      kind: PriorityClass
+      name: app-priority
+    patch: |-
+      $patch: delete
+      apiVersion: scheduling.k8s.io/v1
+      kind: PriorityClass
+      metadata:
+        name: app-priority
+  # Ingress 域名改成 dev
+  - target:
+      kind: Ingress
+      name: app-ingress
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: dev.app.example.com
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: dev.app.example.com

@@ -1,0 +1,41 @@
+# perf 环境 overlay
+# 性能压测使用：3 副本、启用 HPA、有 PDB、有 PriorityClass、集群内 DB/Redis（压测用真实负载）
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: marriott-perf
+
+resources:
+  - ../../base
+  - namespace.yaml
+
+images:
+  - name: hub-sh.aijidou.com/base/marriott-backend
+    newTag: v1-amd64
+  - name: hub-sh.aijidou.com/base/marriott-frontend
+    newTag: v1-amd64
+
+secretGenerator:
+  - name: app-secrets
+    literals:
+      - DB_USER=app
+      - DB_PASSWORD=perf_password_123
+
+# 压测环境：3 副本起步，配合 HPA 自动扩缩
+replicas:
+  - name: backend
+    count: 3
+  - name: frontend
+    count: 2
+
+patches:
+  - target:
+      kind: Ingress
+      name: app-ingress
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: perf.app.example.com
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: perf.app.example.com

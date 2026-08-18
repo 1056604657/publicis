@@ -1,0 +1,7 @@
+# test 环境 Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: marriott-test
+  labels:
+    environment: test

@@ -1,0 +1,76 @@
+# test 环境 overlay
+# 内部 QA 测试使用：单副本、无 HPA、无 PDB、无 PriorityClass、集群内 DB/Redis
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: marriott-test
+
+resources:
+  - ../../base
+  - namespace.yaml
+
+images:
+  - name: hub-sh.aijidou.com/base/marriott-backend
+    newTag: latest-amd64
+  - name: hub-sh.aijidou.com/base/marriott-frontend
+    newTag: latest-amd64
+
+secretGenerator:
+  - name: app-secrets
+    literals:
+      - DB_USER=app
+      - DB_PASSWORD=test_password_123
+
+replicas:
+  - name: backend
+    count: 1
+  - name: frontend
+    count: 1
+
+patches:
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: backend-hpa
+    patch: |-
+      $patch: delete
+      apiVersion: autoscaling/v2
+      kind: HorizontalPodAutoscaler
+      metadata:
+        name: backend-hpa
+  - target:
+      kind: PodDisruptionBudget
+      name: backend-pdb
+    patch: |-
+      $patch: delete
+      apiVersion: policy/v1
+      kind: PodDisruptionBudget
+      metadata:
+        name: backend-pdb
+  - target:
+      kind: PodDisruptionBudget
+      name: frontend-pdb
+    patch: |-
+      $patch: delete
+      apiVersion: policy/v1
+      kind: PodDisruptionBudget
+      metadata:
+        name: frontend-pdb
+  - target:
+      kind: PriorityClass
+      name: app-priority
+    patch: |-
+      $patch: delete
+      apiVersion: scheduling.k8s.io/v1
+      kind: PriorityClass
+      metadata:
+        name: app-priority
+  - target:
+      kind: Ingress
+      name: app-ingress
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: test.app.example.com
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: test.app.example.com

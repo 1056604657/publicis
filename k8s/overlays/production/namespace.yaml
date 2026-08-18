@@ -1,0 +1,7 @@
+# production 环境 Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: marriott-production
+  labels:
+    environment: production

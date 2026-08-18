@@ -1,0 +1,7 @@
+# dev 环境 Namespace（环境隔离：不同环境不同 namespace）
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: marriott-dev
+  labels:
+    environment: dev

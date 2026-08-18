@@ -1,0 +1,108 @@
+# staging 环境 overlay
+# 预发布/UAT 使用：2 副本、启用 HPA、有 PDB、有 PriorityClass、指向云上 RDS/Redis（模拟生产）
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: marriott-staging
+
+resources:
+  - ../../base
+  - namespace.yaml
+  - externalsecret.yaml
+
+images:
+  - name: hub-sh.aijidou.com/base/marriott-backend
+    newTag: v1-amd64
+  - name: hub-sh.aijidou.com/base/marriott-frontend
+    newTag: v1-amd64
+
+replicas:
+  - name: backend
+    count: 2
+  - name: frontend
+    count: 2
+
+patches:
+  # 删除集群内 PostgreSQL（staging 用云上 RDS）
+  - target:
+      kind: StatefulSet
+      name: postgres
+    patch: |-
+      $patch: delete
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: postgres
+  - target:
+      kind: Service
+      name: postgres
+    patch: |-
+      $patch: delete
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: postgres
+  # 删除集群内 Redis（staging 用云上 Redis）
+  - target:
+      kind: Deployment
+      name: redis
+    patch: |-
+      $patch: delete
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: redis
+  - target:
+      kind: Service
+      name: redis
+    patch: |-
+      $patch: delete
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: redis
+  # 删除指向集群内 postgres/redis 的 NetworkPolicy（生产用云上，这两个是死策略）
+  - target:
+      kind: NetworkPolicy
+      name: postgres-allow-backend
+    patch: |-
+      $patch: delete
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: postgres-allow-backend
+  - target:
+      kind: NetworkPolicy
+      name: redis-allow-backend
+    patch: |-
+      $patch: delete
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: redis-allow-backend
+  # Ingress 域名 + cert-manager 正式证书
+  - target:
+      kind: Ingress
+      name: app-ingress
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: staging.app.example.com
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: staging.app.example.com
+      - op: add
+        path: /metadata/annotations
+        value:
+          cert-manager.io/cluster-issuer: letsencrypt-prod
+  # staging 指向云上 RDS/Redis（占位地址，实际替换成阿里云内网地址）
+  - target:
+      kind: ConfigMap
+      name: app-config
+    patch: |-
+      - op: replace
+        path: /data/DB_HOST
+        value: rm-xxx-staging.mysql.rds.aliyuncs.com
+      - op: replace
+        path: /data/REDIS_HOST
+        value: r-xxx-staging.redis.rds.aliyuncs.com

@@ -1,0 +1,21 @@
+# PDB（PodDisruptionBudget）：节点维护时保证至少 N 个 Pod 可用
+# 生产级细节（Task 加分项），防止节点排空时服务全挂
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: backend-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: backend
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: frontend-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: frontend

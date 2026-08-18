@@ -1,0 +1,15 @@
+# 前端 Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  labels:
+    app: frontend
+spec:
+  selector:
+    app: frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080    # 指向 nginx-unprivileged 的 8080 端口
+  type: ClusterIP

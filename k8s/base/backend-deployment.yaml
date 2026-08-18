@@ -1,0 +1,56 @@
+# 后端 Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels:
+    app: backend
+spec:
+  replicas: 1  # overlay 可覆盖（perf/staging/prod 提高）
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      # 关键服务优先调度（配合 PriorityClass）
+      priorityClassName: app-priority
+      # 用独立 ServiceAccount（不用 default，最小权限）
+      serviceAccountName: backend
+      # 非 root 运行（镜像里已是 appuser，UID=1000）
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: backend
+          image: backend
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secrets
+          # 存活探针：只检查进程
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          # 就绪探针：检查 DB + Redis 连通
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

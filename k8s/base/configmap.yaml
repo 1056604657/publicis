@@ -1,0 +1,14 @@
+# 应用配置 ConfigMap（12-factor：配置和代码分离）
+# 敏感信息（密码）放 Secret，非敏感配置放这里
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  DB_HOST: "postgres"       # dev/test 用集群内 postgres；staging/prod overlay 覆盖为 RDS 地址
+  DB_PORT: "5432"
+  DB_NAME: "app"
+  REDIS_HOST: "redis"       # dev/test 用集群内 redis；staging/prod overlay 覆盖
+  REDIS_PORT: "6379"
+  APP_PORT: "8080"
+  OTEL_EXPORTER_OTLP_ENDPOINT: ""

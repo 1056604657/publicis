@@ -1,0 +1,76 @@
+# NetworkPolicy：网络隔离（安全基线）
+# 默认拒绝 + 白名单模型：
+#   1. PostgreSQL 只允许 backend 访问（5432）
+#   2. Redis 只允许 backend 访问（6379）
+#   3. backend 只允许 frontend 和 ingress-controller 访问（8080）
+#
+# 说明：这些策略只对「集群内」的 DB/Redis 生效（dev/test/perf 环境）。
+# staging/production 的数据库在云上 RDS，用阿里云 RDS 白名单限制（见 terraform）。
+
+# 1. PostgreSQL 只允许 backend 访问
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-allow-backend
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: backend
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+# 2. Redis 只允许 backend 访问
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-allow-backend
+spec:
+  podSelector:
+    matchLabels:
+      app: redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: backend
+      ports:
+        - protocol: TCP
+          port: 6379
+---
+# 3. backend 只允许 frontend 访问（8080）
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-allow-frontend
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: frontend
+      ports:
+        - protocol: TCP
+          port: 8080
+    # 允许 ingress-controller 直接访问 backend（如果有需要）
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080

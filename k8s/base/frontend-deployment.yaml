@@ -1,0 +1,43 @@
+# 前端 Deployment
+# 用 nginx-unprivileged 镜像（非 root 运行，监听 8080，配合 runAsNonRoot）
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  labels:
+    app: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      priorityClassName: app-priority
+      # 用独立 ServiceAccount（最小权限）
+      serviceAccountName: frontend
+      # nginx-unprivileged 以非 root 运行（UID=101），与镜像对齐
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+      containers:
+        - name: frontend
+          image: frontend
+          ports:
+            - containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi

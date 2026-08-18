@@ -1,0 +1,9 @@
+# PriorityClass：业务服务优先级
+# 关键服务优先调度，资源紧张时低优先级服务可被抢占
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: app-priority
+value: 100000          # 高优先级（默认 PriorityClass 是 0）
+globalDefault: false
+description: "业务服务优先级，资源紧张时优先保证业务服务调度"

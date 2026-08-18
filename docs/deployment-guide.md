@@ -41,13 +41,16 @@
 
 ### 0.3 已推送到内网 Harbor 的镜像清单
 
+> 所有镜像都是 amd64 架构（集群节点是 amd64，本地 Mac 是 arm64，推送时必须用 `--platform linux/amd64`）。
+
 ```
-hub-sh.aijidou.com/base/marriott-backend:v1      # 后端 Flask API
-hub-sh.aijidou.com/base/marriott-frontend:v1     # 前端 Nginx
-hub-sh.aijidou.com/base/marriott-webhook:v1      # Mutating Webhook
-hub-sh.aijidou.com/base/postgres:15-alpine       # PostgreSQL
-hub-sh.aijidou.com/base/redis:7-alpine           # Redis
-hub-sh.aijidou.com/base/jenkins:lts              # Jenkins
+hub-sh.aijidou.com/base/marriott-backend:v1-amd64 / latest-amd64   # 后端 Flask API
+hub-sh.aijidou.com/base/marriott-frontend:v1-amd64 / latest-amd64  # 前端 Nginx
+hub-sh.aijidou.com/base/marriott-webhook:v1-amd64                  # Mutating Webhook
+hub-sh.aijidou.com/base/postgres:15-alpine-amd64                   # PostgreSQL
+hub-sh.aijidou.com/base/redis:7-alpine-amd64                       # Redis
+hub-sh.aijidou.com/base/jenkins:lts-amd64                          # Jenkins
+hub-sh.aijidou.com/base/k8s-sidecar:2.10.1-amd64                   # Jenkins JCasC 热加载
 ```
 
 ---
@@ -147,7 +150,7 @@ cd /Users/babyyy/工作/marriott-devops
 kubectl kustomize k8s/overlays/dev
 
 # 确认输出里：
-#   - 镜像地址是 hub-sh.aijidou.com/base/marriott-backend:latest
+#   - 镜像地址是 hub-sh.aijidou.com/base/marriott-backend:latest-amd64
 #   - namespace 是 marriott-dev
 #   - 有 postgres、redis（集群内）
 

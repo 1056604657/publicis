@@ -1,5 +1,8 @@
 FROM python:3.12-slim
 
+# OCI 镜像 label：声明运行时语言（供 Mutating Webhook 自动识别做 OTel 注入）
+LABEL language="python"
+
 WORKDIR /app
 
 # 用阿里云 pip 镜像（国内环境加速）

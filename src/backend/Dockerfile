@@ -10,6 +10,9 @@ RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ -r req
 # 运行阶段：复用 builder 已装的包，保持镜像精简
 FROM python:3.12-slim
 
+# OCI 镜像 label：声明运行时语言（供 Mutating Webhook 自动识别做 OTel 注入）
+LABEL language="python"
+
 WORKDIR /app
 
 # 从 builder 复制已安装的 site-packages 和可执行文件（含 gunicorn）

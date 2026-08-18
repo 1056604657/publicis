@@ -11,8 +11,9 @@ Webhook 原理：
 本 webhook 做的三件事：
   ① 资源治理：给没写 resources.limits 的容器自动注入默认资源限制
   ② 标签规范：给业务 Pod 自动注入 team: platform 标签（便于成本分摊/权限管理）
-  ③ 可观测性联动：识别 Python 应用，自动加 OTel 注入 annotation，
-     交给 OpenTelemetry Operator 去注入 agent（不重复造轮子，只做「自动发现」）
+  ③ 可观测性联动：读镜像 OCI metadata label（language=python）自动识别 Python 应用，
+     自动加 OTel 注入 annotation，交给 OpenTelemetry Operator 去注入 agent
+     （不重复造轮子，只做「自动发现」；不猜镜像名，读镜像真实 metadata）
 
 技术：Python + Flask（处理 AdmissionReview JSON，返回 JSON Patch）
 证书：配合 cert-manager 签发（Task 2 加分项联动）
@@ -22,6 +23,7 @@ import base64
 import json
 import os
 
+import requests
 from flask import Flask, jsonify, request
 
 app = Flask(__name__)
@@ -37,6 +39,66 @@ TEAM_LABEL_VALUE = "platform"
 # OTel 自动注入的 annotation key
 # 注意：这个 key 含斜杠，JSON Pointer 里要用 ~1 转义（/ → ~1）
 OTEL_INJECT_PYTHON_ANNOTATION = "instrumentation.opentelemetry.io/inject-python"
+
+# Harbor 镜像仓库地址（用于读镜像 metadata label）
+HARBOR_REGISTRY = os.getenv("HARBOR_REGISTRY", "hub-sh.aijidou.com")
+# Harbor 只读凭证（webhook 读镜像 label 用，只读权限即可）
+HARBOR_USERNAME = os.getenv("HARBOR_USERNAME", "")
+HARBOR_PASSWORD = os.getenv("HARBOR_PASSWORD", "")
+
+
+# ============================================================
+# 读镜像 OCI metadata 里的 label（不猜镜像名）
+# ============================================================
+def get_image_labels(image_ref):
+    """从 Harbor 读镜像的 OCI config label。
+    image_ref 格式：hub-sh.aijidou.com/base/marriott-backend:v1
+    流程：
+      1. GET /v2/<repo>/manifests/<tag> 拿 manifest
+      2. 从 manifest.config.digest 拿 config 的 digest
+      3. GET /v2/<repo>/blobs/<digest> 拉 config
+      4. 读 config.config.Labels
+    """
+    try:
+        # 解析 image_ref：registry/repo:tag
+        # 注意 repo 可能含多级路径（如 base/marriott-backend）
+        parts = image_ref.split("/", 1)
+        registry = parts[0]
+        repo_and_tag = parts[1]
+        if ":" in repo_and_tag:
+            repo, tag = repo_and_tag.rsplit(":", 1)
+        else:
+            repo, tag = repo_and_tag, "latest"
+
+        scheme = "https"
+        base_url = f"{scheme}://{registry}"
+
+        # 1. 拿 manifest
+        manifest_url = f"{base_url}/v2/{repo}/manifests/{tag}"
+        headers = {
+            "Accept": "application/vnd.docker.distribution.manifest.v2+json"
+        }
+        resp = requests.get(manifest_url, headers=headers, timeout=5)
+        if resp.status_code != 200:
+            return {}
+        manifest = resp.json()
+
+        # 2. 拿 config digest
+        config_digest = manifest.get("config", {}).get("digest", "")
+        if not config_digest:
+            return {}
+
+        # 3. 拉 config blob，读 labels
+        blob_url = f"{base_url}/v2/{repo}/blobs/{config_digest}"
+        resp = requests.get(blob_url, timeout=5)
+        if resp.status_code != 200:
+            return {}
+        config = resp.json()
+        return config.get("config", {}).get("Labels", {})
+
+    except Exception:
+        # 读不到 label 时返回空（不阻断 Pod 创建，安全兜底）
+        return {}
 
 
 # ============================================================
@@ -87,22 +149,24 @@ def patch_team_label(pod):
 
 
 # ============================================================
-# ③ 可观测性联动：识别 Python 应用，加 OTel 注入 annotation
+# ③ 可观测性联动：读镜像 metadata label，识别 Python 应用
 # ============================================================
 def is_python_app(container, labels):
     """判断容器是不是 Python 应用：
-    识别规则（可配置）：
-      - 镜像名含 "python"（如 python:3.12-slim）
-      - 或显式标注 label: language=python（如 marriott-backend 这类自定义镜像名）
+    读镜像的 OCI metadata label（language=python），不猜镜像名。
+    这样构建镜像时声明一次语言，部署时 webhook 自动识别，用户无需手动打标签。
     """
     image = container.get("image", "")
-    if "python" in image.lower():
-        return True
-    return labels.get("language") == "python"
+    if not image:
+        return False
+
+    # 读镜像 metadata 里的 label
+    image_labels = get_image_labels(image)
+    return image_labels.get("language") == "python"
 
 
 def patch_otel_annotation(pod, containers):
-    """识别 Python 应用，自动加 OTel 注入 annotation，
+    """识别 Python 应用（读镜像 metadata label），自动加 OTel 注入 annotation，
     交给 OpenTelemetry Operator 去注入 agent（不重复造轮子）"""
     labels = pod.get("metadata", {}).get("labels", {})
     annotations = pod.get("metadata", {}).get("annotations", {})
@@ -111,7 +175,7 @@ def patch_otel_annotation(pod, containers):
     if OTEL_INJECT_PYTHON_ANNOTATION in annotations:
         return []
 
-    # 判断是否有 Python 容器
+    # 判断是否有 Python 容器（读镜像 metadata label）
     has_python = any(is_python_app(c, labels) for c in containers)
     if not has_python:
         return []

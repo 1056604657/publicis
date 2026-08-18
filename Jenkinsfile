@@ -35,97 +35,19 @@ def deployTo(envName, backendImage, frontendImage) {
 }
 
 // ============================================================
-// 蓝绿部署（Blue-Green，选做加分项）
-// 原理：同时跑两套 Deployment（blue=当前稳定版，green=新版本），
-//       Service 通过 selector 切换流量，切换瞬间完成，失败秒级回滚。
-//
-// 步骤：
-//   1. 部署 green 版本（新镜像，独立 Deployment + 独立 version 标签）
-//   2. 等 green 就绪（rollout status + 探针验证）
-//   3. 切换 Service selector 指向 green（流量瞬间切换）
-//   4. 验证新版本，失败则切回 blue（秒级回滚）
-// ============================================================
-def blueGreenDeploy(envName, backendImage) {
-    def namespace = "marriott-${envName}"
-
-    sh """
-        # 1. 部署 green 版本（独立 Deployment，version=green 标签）
-        kubectl apply -f - <<EOF
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: backend-green
-  namespace: ${namespace}
-  labels:
-    app: backend
-    version: green
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: backend
-      version: green
-  template:
-    metadata:
-      labels:
-        app: backend
-        version: green
-    spec:
-      containers:
-      - name: backend
-        image: ${backendImage}
-        ports:
-        - containerPort: 8080
-        readinessProbe:
-          httpGet:
-            path: /readyz
-            port: 8080
-EOF
-
-        # 2. 等 green 就绪（探针通过才继续）
-        kubectl rollout status deployment/backend-green -n ${namespace} --timeout=120s
-
-        # 3. 切换流量：Service selector 从 blue 切到 green
-        kubectl patch service backend -n ${namespace} \\
-            -p '{"spec":{"selector":{"app":"backend","version":"green"}}}'
-
-        echo "✅ 流量已切到 green，开始验证..."
-        sleep 10
-    """
-
-    // 4. 验证 + 自动回滚
-    def healthy = sh(
-        script: "kubectl get pods -n ${namespace} -l version=green -o jsonpath='{.items[?(@.status.containerStatuses[0].ready==true)].metadata.name}' | wc -l",
-        returnStdout: true
-    ).trim()
-
-    if (healthy.toInteger() < 3) {
-        echo "❌ green 版本异常，自动回滚到 blue..."
-        sh """
-            kubectl patch service backend -n ${namespace} \\
-                -p '{"spec":{"selector":{"app":"backend","version":"blue"}}}'
-        """
-        error "蓝绿部署失败，已回滚到 blue 版本"
-    }
-    echo "✅ 蓝绿部署成功，green 版本已上线"
-
-    // 5. 保留 blue 版本作为回滚点（下次部署前清理）
-    sh "kubectl delete deployment backend-blue -n ${namespace} --ignore-not-found=true"
-}
-
-// ============================================================
-// 金丝雀发布（Canary，用 Istio header 灰度，选做加分项）
-// 原理：新版本（green）先只接收「测试组」用户的流量（header 定向），
-//       观察无异常后逐步放大到全量。比副本数比例精确得多。
+// Istio 灰度发布（header 定向，统一发布策略）
+// 核心：先按 header 定向让「测试组」访问新版，测试通过后全量切换。
+// 用 Istio 的 VirtualService 一套搞定，不需要蓝绿/金丝雀多套逻辑。
 //
 // 依赖：k8s/istio/ 下的 DestinationRule + VirtualService + Gateway
 // 流程：
-//   1. 部署 green 版本（version=green 标签）
-//   2. apply Istio 灰度配置（header 定向：X-User-Group: beta → green）
-//   3. 观察 green 健康度
-//   4. 健康则把流量权重逐步放大到 100%，异常则回滚
+//   1. 部署 green 新版（version=green 标签，供 Istio subset 匹配）
+//   2. apply Istio 配置（DestinationRule 定义 v1/v2 子集 + header 路由）
+//   3. header 灰度：X-User-Group: beta → v2（测试组先验证，其他走 v1）
+//   4. 观察 green 健康度
+//   5. 测试通过 → 全量切换（100% 流量切到 v2），异常则回滚
 // ============================================================
-def canaryDeploy(envName, backendImage) {
+def progressiveDeploy(envName, backendImage) {
     def namespace = "marriott-${envName}"
 
     sh """
@@ -162,27 +84,36 @@ spec:
             port: 8080
 EOF
 
-        # 2. 应用 Istio 灰度配置（DestinationRule + VirtualService）
+        # 2. 应用 Istio 配置（DestinationRule 定义 v1(blue)/v2(green) 子集 + header 路由）
         kubectl apply -f k8s/istio/destinationrule.yaml
         kubectl apply -f k8s/istio/virtualservice.yaml
 
-        echo "✅ Istio header 灰度已生效：X-User-Group: beta → green 新版"
-        echo "   测试组用户带 header 访问新版，其他用户仍走 blue 旧版"
+        echo "✅ Istio header 灰度已生效：X-User-Group: beta → v2 新版"
+        echo "   测试组用户带 header 先访问新版，其他用户仍走 v1 旧版"
         sleep 60
     """
 
     // 3. 观察 green 版本健康度
-    def canaryReady = sh(
+    def greenReady = sh(
         script: "kubectl get pods -n ${namespace} -l version=green -o jsonpath='{.items[?(@.status.containerStatuses[0].ready==true)].metadata.name}' | wc -l",
         returnStdout: true
     ).trim()
 
-    if (canaryReady.toInteger() < 1) {
+    if (greenReady.toInteger() < 1) {
         echo "❌ green 版本异常，删除并回滚"
         sh "kubectl delete deployment backend-green -n ${namespace}"
-        error "金丝雀发布失败，已回滚"
+        error "灰度发布失败，已回滚"
     }
-    echo "✅ green 版本健康，可以逐步放大流量权重（改 VirtualService 的 weight）"
+
+    // 4. 测试通过 → 全量切换（100% 流量切到 green 新版）
+    echo "✅ 测试通过，全量切换流量到 green 新版..."
+    sh """
+        kubectl apply -f k8s/istio/virtualservice-full.yaml
+    """
+    echo "✅ 灰度发布完成，100% 流量已切到 green 新版"
+
+    // 5. 旧版 blue 保留作回滚点，确认稳定后下线
+    sh "kubectl delete deployment backend-blue -n ${namespace} --ignore-not-found=true"
 }
 
 pipeline {
@@ -433,8 +364,8 @@ spec:
                     input message: '生产部署需二次确认，确认部署？', ok: '确认部署'
                 }
                 container('kubectl') {
-                    // 生产环境用蓝绿部署（秒级回滚，体现生产级发布能力）
-                    blueGreenDeploy('production', BACKEND_IMAGE)
+                    // 生产环境用 Istio header 灰度（测试组先验证，通过后全量切换）
+                    progressiveDeploy('production', BACKEND_IMAGE)
                 }
                 script {
                     sh """

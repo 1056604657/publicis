@@ -94,7 +94,7 @@ pipeline {
     stage('Push Image')        { 推内网 Harbor }
     stage('Deploy Dev/Test/Perf')  { 自动部署 }
     stage('Deploy Staging')        { 飞书通知 + 人工审批 }
-    stage('Deploy Production')     { 二次审批 + 蓝绿部署 }
+    stage('Deploy Production')     { 二次审批 + Istio header 灰度 }
   }
 
   post { success/failure { 飞书通知 } }
@@ -114,43 +114,24 @@ Validate（fmt + validate）→ Plan（预览）→ Approval（人工审批）�
 1. **Trivy 漏洞扫描**：扫描 HIGH/CRITICAL 级别漏洞，发现即构建失败（`--exit-code 1`）
 2. **非 root 运行检查**：`docker inspect` 检查镜像 User 字段，以 root 运行即失败
 
-## 蓝绿部署（Blue-Green，选做加分项）
+## Istio header 灰度发布（选做加分项）
 
-生产环境部署用**蓝绿部署**，而不是直接替换：
-
-```
-blue（当前稳定版）  ──流量──▶  用户
-                          ↑
-green（新版本）  ──部署好等就绪──▶  切换 Service selector ──▶  流量切到 green
-
-如果 green 异常 → 秒级切回 blue（自动回滚）
-```
-
-**步骤**：
-1. 部署 green 版本（新镜像，独立 Deployment + `version: green` 标签）
-2. `kubectl rollout status` 等 green 就绪（探针通过）
-3. `kubectl patch service` 切换 selector 指向 green（流量瞬间切换）
-4. 验证 green，异常则切回 blue（秒级回滚）
-
-**优势**：零停机、秒级回滚，是生产级发布的标配。
-
-## 金丝雀发布（Canary，用 Istio header 灰度，选做加分项）
-
-用 Istio 的 VirtualService + DestinationRule 实现「按 header 定向灰度」，比副本数比例精确：
+生产环境用 Istio 做 **header 定向灰度**，分两步：
 
 ```
-用户请求带 X-User-Group: beta → 路由到 v2（新版 green）
-其他请求 → 路由到 v1（旧版 blue）
+第 1 步：header 灰度（定向测试）
+  带 X-User-Group: beta 的测试组 → v2 新版
+  其他用户 → v1 旧版
+
+第 2 步：测试通过 → 全量切换
+  100% 流量切到 v2 新版，旧版保留作回滚点
 ```
 
-**灰度流程**：
-1. 部署 green 新版（version=green 标签）
-2. apply Istio 配置（DestinationRule 定义 v1/v2 子集 + VirtualService header 路由）
-3. 测试组用户（带 header）先访问新版，观察无异常
-4. 逐步放大流量权重（header 规则 → weight 权重 90/10 → 50/50 → 100%）
-5. 全部流量切到新版，灰度完成
+**为什么用 Istio 而不是副本数比例**：header 定向能精确让「测试组」先访问新版，比随机分流可控得多。
 
-**Istio 配置文件在 `k8s/istio/`**：gateway.yaml + destinationrule.yaml + virtualservice.yaml
+**为什么统一到一套**：蓝绿、金丝雀、header 灰度本质都是「流量怎么切」，Istio 的 VirtualService 一套就能覆盖，不需要维护多套发布逻辑。
+
+**Istio 配置文件在 `k8s/istio/`**：gateway.yaml + destinationrule.yaml + virtualservice.yaml + virtualservice-full.yaml
 
 ## 飞书通知
 

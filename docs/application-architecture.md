@@ -79,7 +79,7 @@ flowchart LR
 
 ### 3. OpenTelemetry 自动注入
 
-通过 Mutating Webhook 自动识别 Python 应用，加 OTel 注入 annotation，交给 OTel Operator 注入 agent，实现无侵入可观测性。
+通过 Mutating Webhook 读镜像 OCI metadata label（`language=python`）自动识别 Python 应用，加 OTel 注入 annotation，交给 OTel Operator 注入 agent，实现无侵入可观测性。构建镜像时用 `LABEL language=python` 声明一次语言，部署时 webhook 自动发现，用户零感知。
 
 ### 4. 镜像优化
 

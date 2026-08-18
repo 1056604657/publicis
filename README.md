@@ -92,5 +92,5 @@ kubectl apply -k k8s/overlays/dev    # 部署 dev 环境
 3. **健康检查分离**：`/healthz`（存活）和 `/readyz`（就绪）分开
 4. **镜像 tag 策略**：dev/test 用 latest，perf/staging/prod 用 v1（commit SHA）
 5. **分级发布**：dev/test/perf 自动，staging/prod 人工审批
-6. **Mutating Webhook**：资源治理 + 标签规范 + OTel 自动注入联动
+6. **Mutating Webhook**：资源治理 + 标签规范 + OTel 自动注入联动（读镜像 OCI label 识别 Python，不猜镜像名）
 7. **Secret 分层**：dev/test/perf 用 secretGenerator，staging/prod 用 ESO + KMS

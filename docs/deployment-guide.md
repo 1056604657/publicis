@@ -537,6 +537,42 @@ spec:
 
 **关键前提**：Istio 灰度要生效，namespace 必须开 `istio-injection: enabled`（让 Pod 注入 envoy sidecar），否则 VirtualService 规则不会执行。production/staging 的 namespace.yaml 里已经配了。
 
+### 4.11 cert-manager 证书签发 —— 两层证书设计
+
+**cert-manager 在本项目有两个用途，用不同的 Issuer 区分「内部 vs 公开」：**
+
+| 用途 | 用的 Issuer | 证书类型 | 为什么 |
+|------|------------|---------|--------|
+| Mutating Webhook 证书 | `webhook-selfsigned`（自签名） | 内部自签名 | webhook 只在集群内（apiserver↔webhook），自签名 + 注入 CA 就够 |
+| staging/prod 域名证书 | `letsencrypt-prod`（ClusterIssuer） | Let's Encrypt 正式 ACME | 公网服务要浏览器信任，必须公开 CA |
+
+**关键认知 1：Let's Encrypt 免费，cert-manager 全自动**
+
+- Let's Encrypt 是免费的非营利证书机构（不是公司，不收钱）
+- cert-manager 用 ACME 协议全自动：申请 → 验证 → 签发 → 续期，零手工
+- `letsencrypt-prod` 里的 prod 指「正式签发环境」（区别于测试用 staging 环境），不是付费
+
+**关键认知 2：HTTP-01 挑战为什么不用 ingress-nginx**
+
+集群没有 ingress-nginx（只有 Istio + Kong），但证书签发**不一定需要 nginx**：
+
+```
+cert-manager 支持 Gateway API solver（v1.21+）
+    ↓
+集群里 Istio 已注册为 Gateway API 实现者（gateway-controller，ACCEPTED=True）
+    ↓
+所以：有公网入口后，cert-manager 创建 HTTPRoute，Istio 网关响应 ACME 挑战
+    ↓
+不需要再装 ingress-nginx（避免 80/443 端口冲突 + 重复造轮子）
+```
+
+**关键认知 3：为什么现在签不出证书（内网集群限制）**
+
+这是内网集群，`istio-ingressgateway` 是 LoadBalancer 类型但 `EXTERNAL-IP = <pending>`（没有公网 IP）。Let's Encrypt 从公网访问不到域名，所以无论用 nginx 还是 Istio 都签不出证书——**这是物理限制，不是配置问题**。
+
+**面试话术**：
+> 「证书签发我用 cert-manager，分两层：webhook 用自签名证书（集群内部通信，自签名 + 注入 CA 就够），staging/prod 域名用 Let's Encrypt 正式证书（公网服务要浏览器信任）。HTTP-01 挑战这块，我集群有 Istio 且已注册为 Gateway API 实现者，所以不需要装 ingress-nginx——cert-manager 走 Gateway API solver，Istio 网关响应挑战。这是内网集群没有公网入口，所以域名证书是『代码就绪、待公网 LB』状态，符合题目『网络假设已就绪』的设定。生产公网就绪后，整条链路全自动签发和续期。」
+
 ---
 
 ## 第 5 章：常见坑与排错

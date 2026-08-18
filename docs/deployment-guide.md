@@ -275,9 +275,29 @@ CI/CD 流水线已经写好，两个 Jenkinsfile：
 7. Push Image —— 推送到 Harbor
 8. Deploy Dev/Test/Perf —— 自动部署
 9. Deploy Staging —— 人工审批 + 飞书通知
-10. Deploy Production —— 二次审批 + 飞书通知
+10. Deploy Production —— 二次审批 + **蓝绿部署**（秒级回滚）
 
 > 说明：完整流水线需要配置 Jenkins 凭证（Harbor、SonarQube、飞书 webhook 等），见 Jenkinsfile 顶部注释。
+
+### 第 9 步：Istio 灰度发布（选做加分项）
+
+生产环境的灰度发布用 Istio（header 定向 + 权重分流），配置文件在 `k8s/istio/`：
+
+```bash
+# 1. 部署两个版本（blue 旧版 + green 新版，带 version 标签）
+#    （Jenkinsfile 的蓝绿部署会自动创建）
+
+# 2. 应用 Istio 灰度配置
+kubectl apply -f k8s/istio/destinationrule.yaml   # 定义 v1(blue)/v2(green) 子集
+kubectl apply -f k8s/istio/virtualservice.yaml    # header 路由规则
+kubectl apply -f k8s/istio/gateway.yaml           # 集群入口网关
+
+# 3. 验证灰度（带 header 访问新版，不带走旧版）
+curl -H "X-User-Group: beta" http://<gateway>/api/items   # 走 v2 新版
+curl http://<gateway>/api/items                            # 走 v1 旧版
+```
+
+> 灰度原理：VirtualService 按 header 路由——带 `X-User-Group: beta` 的测试组用户先访问新版，其他人走旧版。观察无异常后，把 header 规则逐步改成 weight 权重放量（90/10 → 50/50 → 100%），最后全量切到新版。详见 `k8s/istio/README.md`。
 
 ---
 

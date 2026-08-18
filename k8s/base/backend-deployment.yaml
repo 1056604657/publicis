@@ -20,6 +20,9 @@ spec:
       priorityClassName: app-priority
       # 用独立 ServiceAccount（不用 default，最小权限）
       serviceAccountName: backend
+      # 拉内网 Harbor 镜像的凭证（swr-secret，部署时需先在各 namespace 创建）
+      imagePullSecrets:
+        - name: swr-secret
       # 非 root 运行（镜像里已是 appuser，UID=1000）
       securityContext:
         runAsNonRoot: true

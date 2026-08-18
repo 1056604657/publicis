@@ -15,6 +15,8 @@ spec:
       labels:
         app: redis
     spec:
+      imagePullSecrets:
+        - name: swr-secret
       containers:
         - name: redis
           image: hub-sh.aijidou.com/base/redis:7-alpine-amd64

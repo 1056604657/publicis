@@ -17,6 +17,8 @@ spec:
       labels:
         app: postgres
     spec:
+      imagePullSecrets:
+        - name: swr-secret
       containers:
         - name: postgres
           image: hub-sh.aijidou.com/base/postgres:15-alpine-amd64

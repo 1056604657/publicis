@@ -129,17 +129,37 @@ kubectl apply -k k8s/overlays/dev
 
 ## 第 3 章：逐步部署
 
-### 第 1 步：创建 namespace
+### 第 1 步：创建 namespace + 复制镜像拉取凭证
 
-虽然 Kustomize overlay 里已经带了 namespace.yaml，但先手动确认：
+**这一步很关键，漏了会导致所有 Pod 拉镜像失败（ImagePullBackOff）。**
 
 ```bash
-# 查看 5 个 namespace 是否已存在（应该没有）
-kubectl get namespaces | grep marriott
+# ① 创建 5 个 namespace（也可以直接 apply overlay，会自动创建）
+kubectl create namespace marriott-dev
+kubectl create namespace marriott-test
+kubectl create namespace marriott-perf
+kubectl create namespace marriott-staging
+kubectl create namespace marriott-production
 
-# 部署时 overlay 会自动创建 namespace（因为我们在 overlay 里加了 namespace.yaml）
-# 所以这一步其实不需要单独做，直接进第 2 步
+# ② 复制镜像拉取凭证到每个 namespace（必须！否则拉 hub-sh.aijidou.com 镜像会报 no basic auth）
+# 从 default namespace 的 swr-secret 复制（里面存了 Harbor 的登录凭证）
+for ns in dev test perf staging production; do
+  kubectl get secret swr-secret -n default -o jsonpath='{.data.\.dockerconfigjson}' | \
+    base64 -d > /tmp/dockerconfig.json
+  kubectl create secret generic swr-secret -n marriott-$ns \
+    --from-file=.dockerconfigjson=/tmp/dockerconfig.json \
+    --type=kubernetes.io/dockerconfigjson
+done
+
+# ③ 验证 secret 都创建好了
+kubectl get secret swr-secret -n marriott-dev
+kubectl get secret swr-secret -n marriott-test
+kubectl get secret swr-secret -n marriott-perf
+kubectl get secret swr-secret -n marriott-staging
+kubectl get secret swr-secret -n marriott-production
 ```
+
+> ⚠️ **为什么必须这一步**：内网 Harbor（hub-sh.aijidou.com）拉镜像需要登录凭证，而 Secret 是 namespace 隔离的——default 的 swr-secret 不会被 marriott-dev 用到。所以每个 namespace 都要有自己的 swr-secret。deployment 里已经配了 `imagePullSecrets: swr-secret`，这里只是把 secret 创建出来。
 
 ### 第 2 步：部署 dev 环境
 

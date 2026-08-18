@@ -19,6 +19,9 @@ spec:
       priorityClassName: app-priority
       # 用独立 ServiceAccount（最小权限）
       serviceAccountName: frontend
+      # 拉内网 Harbor 镜像的凭证
+      imagePullSecrets:
+        - name: swr-secret
       # nginx-unprivileged 以非 root 运行（UID=101），与镜像对齐
       securityContext:
         runAsNonRoot: true

@@ -25,6 +25,7 @@ resources:
   - hpa.yaml
   - postgres-statefulset.yaml
   - postgres-service.yaml
+  - postgres-init-configmap.yaml
   - redis-deployment.yaml
   - redis-service.yaml
   - configmap.yaml

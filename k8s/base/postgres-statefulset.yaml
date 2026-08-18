@@ -41,12 +41,18 @@ spec:
           volumeMounts:
             - name: postgres-data
               mountPath: /var/lib/postgresql/data
+            - name: postgres-init
+              mountPath: /docker-entrypoint-initdb.d   # postgres 官方镜像首次启动时自动执行这里的 .sql
           readinessProbe:
             exec:
               # 用环境变量引用用户名，不硬编码（POSTGRES_USER 来自 Secret 的 DB_USER）
               command: ["sh", "-c", "pg_isready -U $POSTGRES_USER"]
             initialDelaySeconds: 5
             periodSeconds: 5
+      volumes:
+        - name: postgres-init
+          configMap:
+            name: postgres-init
   volumeClaimTemplates:
     - metadata:
         name: postgres-data

@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# 系统
+.DS_Store
+
+# 镜像 tar（体积大，不提交 Git）
+images/*.tar
+
+# IDE
+.idea/
+.vscode/
+
+# Terraform
+terraform/.terraform/
+*.tfstate
+*.tfstate.*
+terraform/.terraform.lock.hcl

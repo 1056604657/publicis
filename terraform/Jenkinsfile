@@ -1,0 +1,130 @@
+// ============================================================
+// Marriott 基础设施 CI/CD 流水线（Terraform）
+// Task 3.1 选做：基础设施流水线
+//
+// 阶段：校验 → plan 预览 → 人工审批 → apply 变更
+// 用 Terraform workspace 区分 5 套环境
+// ============================================================
+
+pipeline {
+    agent {
+        kubernetes {
+            yaml '''
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: terraform
+    image: hashicorp/terraform:1.5
+    command: ['sleep', 'infinity']
+'''
+        }
+    }
+
+    parameters {
+        // 选择要操作的环境（workspace）
+        choice(name: 'ENVIRONMENT',
+               choices: ['dev', 'test', 'perf', 'staging', 'production'],
+               description: '目标环境')
+    }
+
+    environment {
+        FEISHU_WEBHOOK = credentials('feishu-webhook')
+        // 阿里云 AK/SK（Jenkins 凭证，不硬编码）
+        ALICLOUD_ACCESS_KEY = credentials('alicloud-access-key')
+        ALICLOUD_SECRET_KEY = credentials('alicloud-secret-key')
+    }
+
+    stages {
+
+        // ============ Stage 1: 校验（terraform validate + fmt）============
+        stage('Validate') {
+            steps {
+                container('terraform') {
+                    sh '''
+                        cd terraform
+                        # 格式检查
+                        terraform fmt -check -recursive || {
+                            echo "❌ Terraform 格式不规范"
+                            exit 1
+                        }
+                        # 语法校验
+                        terraform init -backend=false
+                        terraform validate
+                    '''
+                    echo "✅ Terraform 校验通过"
+                }
+            }
+        }
+
+        // ============ Stage 2: plan 预览 ============
+        stage('Plan') {
+            steps {
+                container('terraform') {
+                    sh '''
+                        cd terraform
+                        # 切换到目标环境 workspace
+                        terraform workspace select ${ENVIRONMENT} || terraform workspace new ${ENVIRONMENT}
+                        # 生成变更计划
+                        terraform plan -var-file="environments/${ENVIRONMENT}.tfvars" -out=plan.tfplan
+                    '''
+                    echo "✅ plan 生成完成，等待审批"
+                }
+            }
+        }
+
+        // ============ Stage 3: 人工审批 ============
+        stage('Approval') {
+            steps {
+                script {
+                    // 飞书通知审批
+                    sh """
+                        curl -X POST '${FEISHU_WEBHOOK}' \\
+                            -H 'Content-Type: application/json' \\
+                            -d '{"msg_type":"text","content":{"text":"🔔 [基础设施审批] ${ENVIRONMENT} 环境待 apply，请到 Jenkins 审批"}}'
+                    """
+                    // production 环境需要双重确认
+                    if (params.ENVIRONMENT == 'production') {
+                        input message: "⚠️ 生产环境基础设施变更，二次确认 apply？", ok: '确认'
+                    } else {
+                        input message: "apply ${ENVIRONMENT} 环境基础设施变更？", ok: 'apply'
+                    }
+                }
+            }
+        }
+
+        // ============ Stage 4: apply 变更 ============
+        stage('Apply') {
+            steps {
+                container('terraform') {
+                    sh '''
+                        cd terraform
+                        terraform apply plan.tfplan
+                    '''
+                    echo "✅ ${ENVIRONMENT} 环境基础设施 apply 完成"
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            script {
+                sh """
+                    curl -X POST '${FEISHU_WEBHOOK}' \\
+                        -H 'Content-Type: application/json' \\
+                        -d '{"msg_type":"text","content":{"text":"🎉 基础设施 ${ENVIRONMENT} 环境部署成功"}}'
+                """
+            }
+        }
+        failure {
+            script {
+                sh """
+                    curl -X POST '${FEISHU_WEBHOOK}' \\
+                        -H 'Content-Type: application/json' \\
+                        -d '{"msg_type":"text","content":{"text":"❌ 基础设施 ${ENVIRONMENT} 环境部署失败"}}'
+                """
+            }
+        }
+    }
+}

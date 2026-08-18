@@ -14,6 +14,7 @@ spec:
     metadata:
       labels:
         app: backend
+        version: blue    # 默认就是「蓝」旧版，灰度发布时部署 green 新版，Istio 用 version 标签区分
     spec:
       # 关键服务优先调度（配合 PriorityClass）
       priorityClassName: app-priority

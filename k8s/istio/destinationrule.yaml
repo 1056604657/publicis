@@ -13,6 +13,6 @@ spec:
     - name: v1        # 旧版（蓝）
       labels:
         version: blue
-    - name: v2        # 新版（绿/金丝雀）
+    - name: v2        # 新版（绿）
       labels:
         version: green

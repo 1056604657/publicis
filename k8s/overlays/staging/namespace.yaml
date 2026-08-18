@@ -5,3 +5,5 @@ metadata:
   name: marriott-staging
   labels:
     environment: staging
+    # 开启 Istio sidecar 自动注入（预发布环境也需要灰度能力）
+    istio-injection: enabled

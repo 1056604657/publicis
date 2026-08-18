@@ -5,3 +5,5 @@ metadata:
   name: marriott-production
   labels:
     environment: production
+    # 开启 Istio sidecar 自动注入（灰度发布的必要前提：Pod 需要 envoy sidecar 执行流量分流）
+    istio-injection: enabled

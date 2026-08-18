@@ -73,12 +73,17 @@ def get_image_labels(image_ref):
         scheme = "https"
         base_url = f"{scheme}://{registry}"
 
+        # 认证：Harbor registry API 需要 Basic Auth（只读凭证即可）
+        auth = None
+        if HARBOR_USERNAME and HARBOR_PASSWORD:
+            auth = (HARBOR_USERNAME, HARBOR_PASSWORD)
+
         # 1. 拿 manifest
         manifest_url = f"{base_url}/v2/{repo}/manifests/{tag}"
         headers = {
             "Accept": "application/vnd.docker.distribution.manifest.v2+json"
         }
-        resp = requests.get(manifest_url, headers=headers, timeout=5)
+        resp = requests.get(manifest_url, headers=headers, auth=auth, timeout=5)
         if resp.status_code != 200:
             return {}
         manifest = resp.json()
@@ -90,7 +95,7 @@ def get_image_labels(image_ref):
 
         # 3. 拉 config blob，读 labels
         blob_url = f"{base_url}/v2/{repo}/blobs/{config_digest}"
-        resp = requests.get(blob_url, timeout=5)
+        resp = requests.get(blob_url, auth=auth, timeout=5)
         if resp.status_code != 200:
             return {}
         config = resp.json()

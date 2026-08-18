@@ -491,15 +491,27 @@ spec:
 
 ### 4.9 Mutating Webhook（三件事）—— K8s 深度加分项
 
-**是什么**：Mutating Webhook 是 K8s 的准入控制机制——Pod 创建前，K8s 先把 Pod 定义发给你的 webhook，webhook 可以「修改」Pod 定义（比如自动加字段），K8s 再按修改后的定义创建 Pod。
+**是什么**：Mutating Webhook 是 K8s 的准入控制机制——Pod 创建前，K8s 先把 Pod 定义发给你的 webhook，webhook 可以「修改」Pod 定义（比如自动加字段），K8s 再按修改后的定义创建 Pod。webhook 本质是一个 HTTPS 服务，返回 JSON Patch 给 apiserver 应用。
 
 **我写的 webhook 做三件事**：
 1. **资源治理**：给没写 `resources.limits` 的容器自动补默认值（防止有人忘配资源限制，导致 Pod 抢占资源）
-2. **标签规范**：给业务 Pod 自动加 `team` 标签（统一标签，方便管理）
-3. **可观测性联动**：识别 Python 应用，自动加 OTel 注入 annotation，交给 OTel Operator 注入 agent
+2. **标签规范**：给业务 Pod 自动加 `team: platform` 标签（统一标签，方便成本分摊、权限管理）
+3. **可观测性联动**：**读镜像的 OCI metadata label（`language=python`）自动识别 Python 应用**，自动加 OTel 注入 annotation，交给 OTel Operator 注入 agent
+
+**第三件事的关键设计——为什么不猜镜像名**：
+
+> 识别 Python 应用不能靠「镜像名含 python」这种猜测（生产镜像名都是业务名，如 `marriott-backend`，不会含 python）。正确做法是读镜像的 OCI metadata——构建镜像时用 `LABEL language=python` 声明一次，webhook 调 Harbor registry API 读镜像 config 里的 label，自动识别。用户部署时零感知。
+
+**为什么「读 metadata」比「打 deployment 标签」更好**（面试关键）：
+- 如果要在 deployment 里打 `language: python` 标签，那用户直接打 OTel 注入注解就行，webhook 就失去「自动发现」的价值了
+- 正确设计：**构建时声明一次语言，部署时 webhook 自动识别，用户什么都不用管**——这才是 Mutating Webhook 该干的事
+
+**webhook 的依赖**（部署时注意）：
+- 需要 Harbor 凭证（读镜像 label 用，环境变量 `HARBOR_USERNAME`/`HARBOR_PASSWORD`，只读权限即可）
+- 读不到 label 时安全兜底（返回空，不阻断 Pod 创建）
 
 **面试话术**：
-> 「我写了一个 Mutating Webhook，利用 K8s 的准入控制机制，在 Pod 创建前自动做三件事：补资源限制、加统一标签、识别 Python 应用自动加 OTel 注解。特别是第三件——我不自己注入 OTel agent，而是加注解交给 OTel Operator 去注入，两个 webhook 各司其职不重复造轮子。这体现我理解 K8s 的 admission 机制本质是 HTTP 协议交互。」
+> 「我写了一个 Mutating Webhook，利用 K8s 准入控制机制，在 Pod 创建前自动做三件事：补资源限制、加 team 标签、识别 Python 应用自动加 OTel 注解。识别语言我不是猜镜像名，而是读镜像的 OCI metadata label——构建时 `LABEL language=python` 声明一次，webhook 调 Harbor API 读 label 自动识别，用户部署时无感知。这体现两点：一是理解 admission 机制本质是 HTTP 交互返回 JSON Patch；二是 webhook 的价值在于自动发现，而不是让用户手动打标签。」
 
 ### 4.10 Istio header 灰度发布 —— 生产发布策略
 

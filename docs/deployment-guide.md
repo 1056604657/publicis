@@ -324,76 +324,269 @@ kubectl apply -f k8s/istio/virtualservice-full.yaml        # 100% 流量切到 v
 
 ---
 
-## 第 4 章：K8s 架构深度说明
+## 第 4 章：K8s 架构深度说明（面试重点，每个配置都讲清楚）
 
-### 4.1 5 环境 overlay 设计
+> 这一章是面试的核心。每个组件都讲清楚：**它是什么、为什么加、每个关键字段是什么意思、面试官会怎么问、你怎么答**。明天部署完，把这一章吃透，面试基本不会答不上来。
 
-用 Kustomize 的 base + overlay 模式，base 写公共配置，overlay 只写环境差异：
+### 4.1 探针分离（healthz vs readyz）—— 最常问的面试题
 
-- **dev/test**：轻量（单副本、无 HPA、无 PDB），用 latest 镜像快速迭代
-- **perf**：压测（3 副本、有 HPA、有 PDB），模拟真实负载
-- **staging/prod**：生产级（多副本、HPA、PDB、PriorityClass、云上 RDS、cert-manager 正式证书）
+**是什么**：K8s 探针分两种，用途完全不同：
 
-### 4.2 Mutating Webhook（三件事）
+| 探针 | 路径 | 检查什么 | 失败后果 |
+|------|------|---------|---------|
+| 存活探针 livenessProbe | `/healthz` | 进程还活着吗 | 重启容器 |
+| 就绪探针 readinessProbe | `/readyz` | 能对外服务吗（DB/Redis 通吗） | 从 Service 摘除，不重启 |
 
-1. **资源治理**：给没写 limits 的容器自动补默认资源限制
-2. **标签规范**：给业务 Pod 自动加 team 标签
+**为什么分离**（这是核心，面试必问）：
+
+> 假设 DB 挂了。如果只有一个探针（比如只检查进程），会发生什么？
+> - 进程是活的（只是连不上 DB），探针返回正常 → 流量继续打到这个 Pod → 但 Pod 处理不了请求 → 用户看到 500
+> - 如果探针失败就重启 → 重启也没用（DB 还是挂的），陷入 CrashLoop
+
+**正确做法**：
+- `/healthz`（存活）：进程活着就 200。DB 挂了不影响，进程不用重启
+- `/readyz`（就绪）：DB + Redis 都通才 200。DB 挂了返回 503，K8s 把它从 Service 摘除，流量转到其他健康的 Pod
+
+**面试话术**：
+> 「我把存活探针和就绪探针分离。存活探针只检查进程是否活着，就绪探针检查依赖（DB/Redis）是否连通。这样 DB 挂了的时候，容器不会被反复重启（重启也没用），而是被就绪探针摘除流量，等 DB 恢复自动加回来。这是 K8s 生产实践的关键——区分『进程死了』和『依赖挂了』两种完全不同的故障。」
+
+**关键字段**：
+```yaml
+livenessProbe:        # 存活探针
+  httpGet:            # HTTP 方式探测
+    path: /healthz    # 探测路径
+    port: 8080
+  initialDelaySeconds: 10   # 启动后等 10 秒再开始探测（给应用启动时间）
+  periodSeconds: 10         # 每 10 秒探测一次
+```
+
+### 4.2 Kustomize 5 环境 overlay —— 为什么用 base + overlay
+
+**是什么**：Kustomize 是 K8s 官方配置管理工具，用「基础 + 覆盖」管理多环境。
+
+**为什么不用 Helm**（面试可能问）：
+- Helm 用模板（Go template），复杂、有学习成本
+- Kustomize 是**纯 YAML 叠加**，base 写公共配置，overlay 只写差异，声明式、直观
+- Kustomize 是 `kubectl` 内置的，不需要额外安装
+
+**为什么不用「复制 5 份完整 YAML」**：
+- 复制 5 份，改一个公共配置要改 5 处，容易漏
+- base + overlay：公共配置改 1 处，环境差异各自维护，不会互相影响
+
+**面试话术**：
+> 「我用 Kustomize 的 base + overlay 管理 5 套环境。base 写所有环境共享的配置（Deployment、Service、探针），overlay 只写每个环境的差异（dev 单副本、perf 3 副本 + HPA、生产指向云上 RDS）。这样一套代码管 5 个环境，公共改动只改 base 一处，环境差异清晰隔离。」
+
+**关键机制**：
+- `replicas`：overlay 覆盖副本数（dev=1，perf=3）
+- `images`：overlay 覆盖镜像 tag（dev=latest，perf=v1）
+- `patches`：overlay 增删改 base 的资源（如 dev 删掉 HPA、删掉 PDB）
+- `$patch: delete`：删除 base 里不需要的资源
+
+### 4.3 HPA（水平自动扩缩容）—— 为什么只有 perf/staging/prod 有
+
+**是什么**：HPA 根据 CPU/内存使用率自动增减 Pod 副本数。
+
+**为什么 dev/test 不用**：
+- dev/test 是开发测试环境，负载低且可预期，固定副本数就够
+- 开了 HPA 反而增加复杂度（开发时副本数忽多忽少，排障麻烦）
+
+**为什么 perf 必须有**：
+- perf 是压测环境，要模拟真实生产的高负载 + 弹性扩缩容
+- 压测时看 HPA 能不能正确扩容，这是验证生产容量规划的关键
+
+**面试话术**：
+> 「我 HPA 只在 perf/staging/prod 开，dev/test 不开。因为开发测试环境负载低，固定副本数够用，开 HPA 反而干扰排障。perf 环境必须开 HPA，因为压测就是要验证高负载下能不能自动扩容。」
+
+**关键字段**：
+```yaml
+spec:
+  minReplicas: 2        # 最小副本数
+  maxReplicas: 10       # 最大副本数
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          averageUtilization: 70   # CPU 平均使用率超过 70% 就扩容
+```
+
+### 4.4 PDB（Pod 中断预算）—— 保证节点维护时服务不中断
+
+**是什么**：PDB 告诉 K8s「这个服务至少要有几个副本在跑」，防止节点维护/驱逐时把服务搞挂。
+
+**为什么需要**：
+- 假设生产 3 个副本，某天运维要维护一个节点，K8s 会驱逐该节点上的 Pod
+- 如果没有 PDB，K8s 可能同时驱逐 2-3 个副本，服务瞬间没副本可用
+- 有 PDB（如 `minAvailable: 2`），K8s 会保证任何时候至少 2 个副本在跑，驱逐是「滚动」的
+
+**面试话术**：
+> 「我加了 PDB，生产环境保证至少 N-1 个副本可用。这样节点维护、滚动升级时，K8s 不会把所有副本同时驱逐，服务始终有副本在对外服务，实现零停机维护。」
+
+**关键字段**：
+```yaml
+spec:
+  minAvailable: 2       # 至少 2 个副本可用（3 副本时最多驱逐 1 个）
+  selector:
+    matchLabels:
+      app: backend
+```
+
+### 4.5 PriorityClass（优先级）—— 保证关键服务优先调度
+
+**是什么**：PriorityClass 给 Pod 标优先级，节点资源紧张时，高优先级 Pod 优先被调度、低优先级先被驱逐。
+
+**为什么需要**：
+- 集群资源紧张时，如果 backend（业务核心）和某些不重要任务抢资源，没有优先级就可能 backend 调度失败
+- 给 backend/frontend 标高优先级，保证关键服务在资源紧张时也能跑
+
+**面试话术**：
+> 「我给核心服务配了 PriorityClass，标记为高优先级。这样集群资源紧张或节点故障时，关键业务 Pod 优先被调度、最后被驱逐，保证核心服务稳定。」
+
+### 4.6 NetworkPolicy（网络隔离）—— 最小访问权限
+
+**是什么**：NetworkPolicy 是「集群内防火墙」，控制 Pod 之间的流量。
+
+**为什么需要**（安全基线）：
+- 默认情况下，K8s 集群内所有 Pod 可以互相访问（无隔离）
+- 这意味着：如果某个 Pod 被攻破，攻击者可以访问同集群的所有其他服务（包括数据库）
+- NetworkPolicy 做「白名单」：只允许 backend 访问 postgres/redis，其他 Pod 一律拒绝
+
+**三条策略**：
+1. `postgres-allow-backend`：只有 backend 能访问 postgres 的 5432
+2. `redis-allow-backend`：只有 backend 能访问 redis 的 6379
+3. `backend-allow-frontend`：只有 frontend 能访问 backend 的 8080
+
+**面试话术**：
+> 「我加了 NetworkPolicy 做最小访问控制。默认所有 Pod 互相隔离，只有明确声明的流量才放行——backend 能访问 postgres 和 redis，frontend 能访问 backend，其他 Pod 一律拒绝。这是安全基线，防止某个服务被攻破后横向移动攻击数据库。」
+
+**重要说明**：NetworkPolicy 只对「集群内」的流量生效。staging/prod 的数据库在云上 RDS，集群内没有 postgres/redis，所以用**阿里云 RDS 白名单**（`security_ips` 限制成 VPC 网段）来限制访问——这是「集群内 vs 集群外」两层安全边界。
+
+### 4.7 ServiceAccount + RBAC（最小权限）
+
+**是什么**：ServiceAccount 是 Pod 的身份，RBAC 控制这个身份能做什么。
+
+**为什么不用 default SA**：
+- 每个 namespace 有个 `default` ServiceAccount，所有 Pod 默认用它
+- 如果所有 Pod 用同一个 default SA，权限无法区分，也无法做最小权限
+- 给 backend/frontend 各建独立 SA，权限清晰、可审计
+
+**面试话术**：
+> 「我给 backend 和 frontend 分别建了独立的 ServiceAccount，不用默认的。这样每个服务的身份独立，配合 RBAC 可以做最小权限——比如 backend 只需要读自己的 Secret，不需要集群级的任何权限。」
+
+### 4.8 Secret 分层（dev 用 generator，prod 用 KMS）
+
+**是什么**：数据库密码是敏感信息，不同环境用不同的管理方式。
+
+| 环境 | 方式 | 为什么 |
+|------|------|--------|
+| dev/test/perf | Kustomize secretGenerator（明文在 yaml） | 开发密码不敏感，简单方便 |
+| staging/prod | External Secrets Operator + 阿里云 KMS | 生产密钥真身在 KMS，代码零明文 |
+
+**为什么生产不能用明文 secret**：
+- 代码即一切要求所有配置进 git，但**明文密码不能进 git**（泄露风险）
+- 解法：生产用 External Secrets Operator，从阿里云 KMS 拉取密钥，git 里只有「声明要拉哪个 key」，没有明文
+
+**面试话术**：
+> 「我做了 Secret 分层。dev/test/perf 用 Kustomize 的 secretGenerator 生成开发密码，简单方便。staging/prod 用 External Secrets Operator 从阿里云 KMS 拉取密钥——密钥真身在 KMS，git 里只有 ExternalSecret 声明，没有明文密码。这体现『密钥管理和代码分离』的安全意识。」
+
+### 4.9 Mutating Webhook（三件事）—— K8s 深度加分项
+
+**是什么**：Mutating Webhook 是 K8s 的准入控制机制——Pod 创建前，K8s 先把 Pod 定义发给你的 webhook，webhook 可以「修改」Pod 定义（比如自动加字段），K8s 再按修改后的定义创建 Pod。
+
+**我写的 webhook 做三件事**：
+1. **资源治理**：给没写 `resources.limits` 的容器自动补默认值（防止有人忘配资源限制，导致 Pod 抢占资源）
+2. **标签规范**：给业务 Pod 自动加 `team` 标签（统一标签，方便管理）
 3. **可观测性联动**：识别 Python 应用，自动加 OTel 注入 annotation，交给 OTel Operator 注入 agent
 
-### 4.3 NetworkPolicy 分层
+**面试话术**：
+> 「我写了一个 Mutating Webhook，利用 K8s 的准入控制机制，在 Pod 创建前自动做三件事：补资源限制、加统一标签、识别 Python 应用自动加 OTel 注解。特别是第三件——我不自己注入 OTel agent，而是加注解交给 OTel Operator 去注入，两个 webhook 各司其职不重复造轮子。这体现我理解 K8s 的 admission 机制本质是 HTTP 协议交互。」
 
-- 集群内（dev/test/perf）：NetworkPolicy 限制 backend → postgres/redis
-- 云上（staging/prod）：用阿里云 RDS 白名单限制（terraform 里 security_ips）
+### 4.10 Istio header 灰度发布 —— 生产发布策略
 
-### 4.4 Secret 分层
+**是什么**：用 Istio 的 VirtualService 按 header 定向灰度。
 
-- dev/test/perf：用 Kustomize secretGenerator（开发密码，不敏感）
-- staging/prod：用 External Secrets Operator + 阿里云 KMS（密钥真身在 KMS，代码零明文）
+**为什么用 header 定向（而不是随机分流）**：
+- 随机分流（副本数比例）不精确，新版本有问题会影响一部分随机用户
+- header 定向能精确让「测试组」先访问新版，出问题只影响测试组，风险可控
 
-> 注：集群没装 ESO，staging/prod 的 ExternalSecret 只作为代码演示，面试时说明「生产环境装 ESO 后从 KMS 拉取真实密钥」。
+**两步流程**：
+1. header 灰度：带 `X-User-Group: beta` 的测试组 → v2 新版，其他 → v1 旧版
+2. 测试通过 → 全量切换：100% 流量切到 v2，旧版保留作回滚点
 
-### 4.5 探针分离
+**三个核心概念**：
+| 概念 | 作用 | 类比 |
+|------|------|------|
+| Gateway | 集群入口 | 大门 |
+| VirtualService | 路由规则（header → 版本） | 门卫看你是谁决定进哪个房间 |
+| DestinationRule | 定义版本子集（v1/v2） | 房间登记表 |
 
-- `/healthz`：存活探针，只检查进程是否活着
-- `/readyz`：就绪探针，检查 DB + Redis 是否连通（依赖挂了摘流量，不重启容器）
+**面试话术**：
+> 「我用 Istio 做 header 灰度发布，分两步：先用 VirtualService 按 header 路由，带 X-User-Group: beta 的测试组用户先访问新版，其他人走旧版；测试组验证没问题后，切换 VirtualService 把 100% 流量切到新版，旧版保留作回滚点。这样蓝绿、金丝雀、header 灰度本质都是流量切换，Istio 一套 VirtualService 就能覆盖，不需要维护多套发布逻辑。」
+
+**关键前提**：Istio 灰度要生效，namespace 必须开 `istio-injection: enabled`（让 Pod 注入 envoy sidecar），否则 VirtualService 规则不会执行。production/staging 的 namespace.yaml 里已经配了。
 
 ---
 
 ## 第 5 章：常见坑与排错
 
-### 5.1 镜像拉不下来
+> 这些坑都是**真实踩过的**（部署 Jenkins 时全部遇到过），明天部署 dev 环境大概率也会遇到，提前知道怎么查。
+
+### 5.1 镜像拉不下来（ImagePullBackOff）
+
+**现象**：`kubectl get pods` 显示 `ImagePullBackOff` 或 `ErrImagePull`。
+
+**原因**：内网 Harbor 拉镜像需要凭证，但 secret 没复制到对应 namespace。
 
 ```bash
-kubectl describe pod <pod名> -n marriott-dev
-# 看 Events，如果是 ImagePullBackOff，说明镜像地址不对或没登录
+# 看具体错误
+kubectl describe pod <pod名> -n marriott-dev | grep -A5 Events
+# 如果看到 "no basic auth credentials"，就是缺 swr-secret
 ```
 
-**排查**：确认镜像地址是 `hub-sh.aijidou.com/base/...`，且 docker 已登录 Harbor。
+**解决**：确认第 1 步「复制 swr-secret」做了，且 secret 名字是 `swr-secret`。
 
-### 5.2 Pod 起不来（CrashLoopBackOff）
+### 5.2 架构不匹配（exec format error）
+
+**现象**：Pod 显示 `CrashLoopBackOff`，日志报 `exec format error`。
+
+**原因**：本地 Mac 是 arm64，集群节点是 amd64。如果镜像推成 arm64，节点执行会报这个错。
+
+**解决**：所有镜像已经用 `--platform linux/amd64` 重推了，tag 带 `-amd64` 后缀。如果还报错，确认镜像 tag 是 `-amd64` 结尾。
+
+### 5.3 Pod 起不来（CrashLoopBackOff）
+
+**现象**：backend Pod 反复重启。
 
 ```bash
 kubectl logs <pod名> -n marriott-dev
-# 看应用日志
+# 看应用日志，常见原因：
+#   - postgres 没起来（backend 连不上 DB）
+#   - 数据库表没创建（之前漏挂 init.sql，已修复）
 ```
 
-**常见原因**：postgres 没起来（backend 等 DB）、Secret 缺失、配置错误。
+**排查顺序**：先看 postgres 和 redis 是否 Running，再看 backend 日志。
 
-### 5.3 就绪探针一直失败
+### 5.4 就绪探针一直失败（readyz 返回 503）
+
+**现象**：Pod 是 Running，但 READY 列是 0/1。
+
+**原因**：backend 的 `/readyz` 检查 DB + Redis 连通，如果这两个没起来，就绪探针一直失败。
 
 ```bash
-kubectl describe pod <pod名> -n marriott-dev
-# 看 Events，如果 Readiness probe failed
+kubectl describe pod <pod名> -n marriott-dev | grep -A5 "Readiness"
+kubectl logs <pod名> -n marriott-dev   # 看是不是 database_unreachable 或 redis_unreachable
 ```
 
-**原因**：backend 连不上 DB/Redis。先确认 postgres/redis Pod 是否 Running。
+**解决**：等 postgres 和 redis 先 Running，backend 就绪探针自然通过。
 
-### 5.4 删除环境重来
+### 5.5 删除环境重来
 
 ```bash
 kubectl delete -k k8s/overlays/dev   # 删除 dev 环境所有资源
 kubectl apply -k k8s/overlays/dev    # 重新部署
 ```
+
+> 注意：`kubectl delete -k` 会删除 namespace 里的所有资源，但**不会删除 PVC**（postgres 的持久化数据还在）。如果数据库数据脏了，需要手动 `kubectl delete pvc -n marriott-dev postgres-data-postgres-0`。
 
 ---
 

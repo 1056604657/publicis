@@ -1,0 +1,19 @@
+# cert-manager ClusterIssuer：letsencrypt-prod（正式 ACME 证书签发器）
+# 用于 staging/production 的正式域名 TLS 证书
+# 说明：ClusterIssuer 是集群级资源，一次性安装，各环境的 Ingress 通过 annotation 引用
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    # Let's Encrypt 正式环境（注意：生产正式域名才用 prod，测试用 staging 避免频率限制）
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: admin@marriott.com
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      # HTTP-01 验证：通过 Ingress 暴露的路径完成 ACME challenge
+      - http01:
+          ingress:
+            class: nginx

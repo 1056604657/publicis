@@ -1,0 +1,8 @@
+# cert-manager ClusterIssuer：selfsigned（自签名证书）
+# 用于 dev/test/perf 环境的内部 TLS，避免对开发环境浪费正式证书额度
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned
+spec:
+  selfSigned: {}

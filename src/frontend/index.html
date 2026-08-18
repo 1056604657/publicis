@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>三层 Hello-World 应用</title>
+    <style>
+        body { font-family: -apple-system, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; }
+        h1 { color: #333; }
+        .item { border: 1px solid #e0e0e0; border-radius: 8px; padding: 12px 16px; margin: 12px 0; }
+        .item h3 { margin: 0 0 4px; }
+        .item .desc { color: #666; margin: 0; }
+        .item .time { color: #999; font-size: 12px; }
+        .source { color: #999; font-size: 13px; margin-bottom: 16px; }
+        form { margin: 20px 0; display: flex; gap: 8px; }
+        input { padding: 8px; border: 1px solid #ccc; border-radius: 4px; flex: 1; }
+        button { padding: 8px 16px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #45a049; }
+        .error { color: #d32f2f; }
+    </style>
+</head>
+<body>
+    <h1>商品列表</h1>
+    <p class="source" id="source"></p>
+
+    <form id="add-form">
+        <input type="text" id="name" placeholder="商品名称" required>
+        <input type="text" id="description" placeholder="描述">
+        <button type="submit">新增</button>
+    </form>
+    <p class="error" id="error"></p>
+
+    <div id="items"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>

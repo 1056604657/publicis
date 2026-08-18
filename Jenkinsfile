@@ -114,57 +114,75 @@ EOF
 }
 
 // ============================================================
-// 金丝雀发布（Canary，选做加分项）
-// 原理：新版本先接收小比例流量（比如 10%），观察无异常后逐步放大。
-// 简化实现：用两个 Deployment 副本数比例控制流量（3 个副本里 green 占 1 = 33%）
+// 金丝雀发布（Canary，用 Istio header 灰度，选做加分项）
+// 原理：新版本（green）先只接收「测试组」用户的流量（header 定向），
+//       观察无异常后逐步放大到全量。比副本数比例精确得多。
+//
+// 依赖：k8s/istio/ 下的 DestinationRule + VirtualService + Gateway
+// 流程：
+//   1. 部署 green 版本（version=green 标签）
+//   2. apply Istio 灰度配置（header 定向：X-User-Group: beta → green）
+//   3. 观察 green 健康度
+//   4. 健康则把流量权重逐步放大到 100%，异常则回滚
 // ============================================================
-def canaryDeploy(envName, backendImage, canaryPercent) {
+def canaryDeploy(envName, backendImage) {
     def namespace = "marriott-${envName}"
 
     sh """
-        # 部署金丝雀版本（副本数按比例）
+        # 1. 部署 green 版本（version=green 标签，供 Istio subset 匹配）
         kubectl apply -f - <<EOF
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: backend-canary
+  name: backend-green
   namespace: ${namespace}
   labels:
     app: backend
-    version: canary
+    version: green
 spec:
   replicas: 1
   selector:
     matchLabels:
       app: backend
-      version: canary
+      version: green
   template:
     metadata:
       labels:
         app: backend
-        version: canary
+        version: green
     spec:
       containers:
       - name: backend
         image: ${backendImage}
+        ports:
+        - containerPort: 8080
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8080
 EOF
 
-        echo "金丝雀版本已部署，占 ${canaryPercent}% 流量，观察中..."
+        # 2. 应用 Istio 灰度配置（DestinationRule + VirtualService）
+        kubectl apply -f k8s/istio/destinationrule.yaml
+        kubectl apply -f k8s/istio/virtualservice.yaml
+
+        echo "✅ Istio header 灰度已生效：X-User-Group: beta → green 新版"
+        echo "   测试组用户带 header 访问新版，其他用户仍走 blue 旧版"
         sleep 60
     """
 
-    // 观察金丝雀版本健康度，异常则回滚
+    // 3. 观察 green 版本健康度
     def canaryReady = sh(
-        script: "kubectl get pods -n ${namespace} -l version=canary -o jsonpath='{.items[?(@.status.containerStatuses[0].ready==true)].metadata.name}' | wc -l",
+        script: "kubectl get pods -n ${namespace} -l version=green -o jsonpath='{.items[?(@.status.containerStatuses[0].ready==true)].metadata.name}' | wc -l",
         returnStdout: true
     ).trim()
 
     if (canaryReady.toInteger() < 1) {
-        echo "❌ 金丝雀版本异常，删除并回滚"
-        sh "kubectl delete deployment backend-canary -n ${namespace}"
+        echo "❌ green 版本异常，删除并回滚"
+        sh "kubectl delete deployment backend-green -n ${namespace}"
         error "金丝雀发布失败，已回滚"
     }
-    echo "✅ 金丝雀版本健康，可逐步放大流量"
+    echo "✅ green 版本健康，可以逐步放大流量权重（改 VirtualService 的 weight）"
 }
 
 pipeline {

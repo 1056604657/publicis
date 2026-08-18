@@ -31,7 +31,8 @@ marriott-devops/
 │   ├── overlays/              # 5 套环境差异化配置
 │   ├── webhook/               # Webhook 部署资源
 │   ├── cert-manager/          # ClusterIssuer 定义
-│   └── jenkins/               # Jenkins 部署 values.yaml
+│   ├── jenkins/               # Jenkins 部署 values.yaml
+│   └── istio/                 # Istio 灰度发布（Gateway/VirtualService/DestinationRule）
 ├── terraform/                 # IaC（Task 1）
 │   ├── modules/               # 模块化（vpc/rds/redis/oss/acr）
 │   ├── environments/          # 5 套环境 tfvars

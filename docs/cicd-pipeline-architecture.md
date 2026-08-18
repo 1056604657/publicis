@@ -134,13 +134,23 @@ green（新版本）  ──部署好等就绪──▶  切换 Service selector
 
 **优势**：零停机、秒级回滚，是生产级发布的标配。
 
-## 金丝雀发布（Canary，选做加分项）
+## 金丝雀发布（Canary，用 Istio header 灰度，选做加分项）
 
-新版本先接收小比例流量，观察无异常后逐步放大：
+用 Istio 的 VirtualService + DestinationRule 实现「按 header 定向灰度」，比副本数比例精确：
 
-- 部署金丝雀版本（1 个副本，占小比例流量）
-- 观察一段时间（如 60 秒）
-- 健康则逐步放大副本数，异常则删除回滚
+```
+用户请求带 X-User-Group: beta → 路由到 v2（新版 green）
+其他请求 → 路由到 v1（旧版 blue）
+```
+
+**灰度流程**：
+1. 部署 green 新版（version=green 标签）
+2. apply Istio 配置（DestinationRule 定义 v1/v2 子集 + VirtualService header 路由）
+3. 测试组用户（带 header）先访问新版，观察无异常
+4. 逐步放大流量权重（header 规则 → weight 权重 90/10 → 50/50 → 100%）
+5. 全部流量切到新版，灰度完成
+
+**Istio 配置文件在 `k8s/istio/`**：gateway.yaml + destinationrule.yaml + virtualservice.yaml
 
 ## 飞书通知
 

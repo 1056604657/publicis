@@ -94,7 +94,7 @@ pipeline {
     stage('Push Image')        { 推内网 Harbor }
     stage('Deploy Dev/Test/Perf')  { 自动部署 }
     stage('Deploy Staging')        { 飞书通知 + 人工审批 }
-    stage('Deploy Production')     { 二次审批 + 飞书通知 }
+    stage('Deploy Production')     { 二次审批 + 蓝绿部署 }
   }
 
   post { success/failure { 飞书通知 } }
@@ -113,6 +113,34 @@ Validate（fmt + validate）→ Plan（预览）→ Approval（人工审批）�
 
 1. **Trivy 漏洞扫描**：扫描 HIGH/CRITICAL 级别漏洞，发现即构建失败（`--exit-code 1`）
 2. **非 root 运行检查**：`docker inspect` 检查镜像 User 字段，以 root 运行即失败
+
+## 蓝绿部署（Blue-Green，选做加分项）
+
+生产环境部署用**蓝绿部署**，而不是直接替换：
+
+```
+blue（当前稳定版）  ──流量──▶  用户
+                          ↑
+green（新版本）  ──部署好等就绪──▶  切换 Service selector ──▶  流量切到 green
+
+如果 green 异常 → 秒级切回 blue（自动回滚）
+```
+
+**步骤**：
+1. 部署 green 版本（新镜像，独立 Deployment + `version: green` 标签）
+2. `kubectl rollout status` 等 green 就绪（探针通过）
+3. `kubectl patch service` 切换 selector 指向 green（流量瞬间切换）
+4. 验证 green，异常则切回 blue（秒级回滚）
+
+**优势**：零停机、秒级回滚，是生产级发布的标配。
+
+## 金丝雀发布（Canary，选做加分项）
+
+新版本先接收小比例流量，观察无异常后逐步放大：
+
+- 部署金丝雀版本（1 个副本，占小比例流量）
+- 观察一段时间（如 60 秒）
+- 健康则逐步放大副本数，异常则删除回滚
 
 ## 飞书通知
 

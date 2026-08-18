@@ -20,3 +20,8 @@ output "vpc_id" {
   description = "VPC ID"
   value       = module.vpc.vpc_id
 }
+
+output "slb_address" {
+  description = "负载均衡内网地址"
+  value       = module.slb.slb_address
+}

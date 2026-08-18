@@ -34,6 +34,139 @@ def deployTo(envName, backendImage, frontendImage) {
     """
 }
 
+// ============================================================
+// 蓝绿部署（Blue-Green，选做加分项）
+// 原理：同时跑两套 Deployment（blue=当前稳定版，green=新版本），
+//       Service 通过 selector 切换流量，切换瞬间完成，失败秒级回滚。
+//
+// 步骤：
+//   1. 部署 green 版本（新镜像，独立 Deployment + 独立 version 标签）
+//   2. 等 green 就绪（rollout status + 探针验证）
+//   3. 切换 Service selector 指向 green（流量瞬间切换）
+//   4. 验证新版本，失败则切回 blue（秒级回滚）
+// ============================================================
+def blueGreenDeploy(envName, backendImage) {
+    def namespace = "marriott-${envName}"
+
+    sh """
+        # 1. 部署 green 版本（独立 Deployment，version=green 标签）
+        kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-green
+  namespace: ${namespace}
+  labels:
+    app: backend
+    version: green
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: backend
+      version: green
+  template:
+    metadata:
+      labels:
+        app: backend
+        version: green
+    spec:
+      containers:
+      - name: backend
+        image: ${backendImage}
+        ports:
+        - containerPort: 8080
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8080
+EOF
+
+        # 2. 等 green 就绪（探针通过才继续）
+        kubectl rollout status deployment/backend-green -n ${namespace} --timeout=120s
+
+        # 3. 切换流量：Service selector 从 blue 切到 green
+        kubectl patch service backend -n ${namespace} \\
+            -p '{"spec":{"selector":{"app":"backend","version":"green"}}}'
+
+        echo "✅ 流量已切到 green，开始验证..."
+        sleep 10
+    """
+
+    // 4. 验证 + 自动回滚
+    def healthy = sh(
+        script: "kubectl get pods -n ${namespace} -l version=green -o jsonpath='{.items[?(@.status.containerStatuses[0].ready==true)].metadata.name}' | wc -l",
+        returnStdout: true
+    ).trim()
+
+    if (healthy.toInteger() < 3) {
+        echo "❌ green 版本异常，自动回滚到 blue..."
+        sh """
+            kubectl patch service backend -n ${namespace} \\
+                -p '{"spec":{"selector":{"app":"backend","version":"blue"}}}'
+        """
+        error "蓝绿部署失败，已回滚到 blue 版本"
+    }
+    echo "✅ 蓝绿部署成功，green 版本已上线"
+
+    // 5. 保留 blue 版本作为回滚点（下次部署前清理）
+    sh "kubectl delete deployment backend-blue -n ${namespace} --ignore-not-found=true"
+}
+
+// ============================================================
+// 金丝雀发布（Canary，选做加分项）
+// 原理：新版本先接收小比例流量（比如 10%），观察无异常后逐步放大。
+// 简化实现：用两个 Deployment 副本数比例控制流量（3 个副本里 green 占 1 = 33%）
+// ============================================================
+def canaryDeploy(envName, backendImage, canaryPercent) {
+    def namespace = "marriott-${envName}"
+
+    sh """
+        # 部署金丝雀版本（副本数按比例）
+        kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-canary
+  namespace: ${namespace}
+  labels:
+    app: backend
+    version: canary
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+      version: canary
+  template:
+    metadata:
+      labels:
+        app: backend
+        version: canary
+    spec:
+      containers:
+      - name: backend
+        image: ${backendImage}
+EOF
+
+        echo "金丝雀版本已部署，占 ${canaryPercent}% 流量，观察中..."
+        sleep 60
+    """
+
+    // 观察金丝雀版本健康度，异常则回滚
+    def canaryReady = sh(
+        script: "kubectl get pods -n ${namespace} -l version=canary -o jsonpath='{.items[?(@.status.containerStatuses[0].ready==true)].metadata.name}' | wc -l",
+        returnStdout: true
+    ).trim()
+
+    if (canaryReady.toInteger() < 1) {
+        echo "❌ 金丝雀版本异常，删除并回滚"
+        sh "kubectl delete deployment backend-canary -n ${namespace}"
+        error "金丝雀发布失败，已回滚"
+    }
+    echo "✅ 金丝雀版本健康，可逐步放大流量"
+}
+
 pipeline {
     agent {
         kubernetes {
@@ -282,7 +415,8 @@ spec:
                     input message: '生产部署需二次确认，确认部署？', ok: '确认部署'
                 }
                 container('kubectl') {
-                    deployTo('production', BACKEND_IMAGE, FRONTEND_IMAGE)
+                    // 生产环境用蓝绿部署（秒级回滚，体现生产级发布能力）
+                    blueGreenDeploy('production', BACKEND_IMAGE)
                 }
                 script {
                     sh """

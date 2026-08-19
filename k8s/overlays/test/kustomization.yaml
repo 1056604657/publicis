@@ -64,6 +64,19 @@ patches:
       kind: PriorityClass
       metadata:
         name: app-priority
+  # 同时删除 backend/frontend 里的 priorityClassName 引用（否则 Pod 创建会报 no PriorityClass found）
+  - target:
+      kind: Deployment
+      name: backend
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/priorityClassName
+  - target:
+      kind: Deployment
+      name: frontend
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/priorityClassName
   - target:
       kind: Ingress
       name: app-ingress

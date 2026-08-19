@@ -131,74 +131,86 @@ kubectl apply -k k8s/overlays/dev
 
 ### 第 1 步：创建 namespace + 复制镜像拉取凭证
 
-**✅ 已完成（2026-08-19 已执行）**：5 个 namespace 和 swr-secret 都已经在集群里了，这一步**直接跳过**，不用重复执行。
-
-验证一下确实就绪（只读检查）：
+**✅ 已完成（2026-08-19 已执行）**：5 个 namespace 和 swr-secret 都已经在集群里了，这一步**直接跳过**。
 
 ```bash
+# 只读验证（确认就绪）
 kubectl get ns | grep marriott          # 应看到 5 个 Active
 kubectl get secret swr-secret -n marriott-dev   # 应看到 dockerconfigjson
 ```
-
-> 如果验证都通过，直接进第 2 步部署 dev 环境。下面是原始步骤（仅当你在新集群重新部署时参考）。
 
 ---
 
 ### 第 2 步：部署 dev 环境
 
+**✅ 已部署（2026-08-19 已实测通过）**：dev 环境已部署并验证全链路（healthz/readyz/api/items 缓存链路），**直接跳过**。
+
+如果你在新集群重来，命令是：
+
 ```bash
 cd /Users/babyyy/工作/marriott-devops
 
-# ① 先预览（只看不部署）
+# ① 预览（只看不部署）
 kubectl kustomize k8s/overlays/dev
-
-# 确认输出里：
-#   - 镜像地址是 hub-sh.aijidou.com/base/marriott-backend:latest-amd64
-#   - namespace 是 marriott-dev
-#   - 有 postgres、redis（集群内）
 
 # ② 真正部署
 kubectl apply -k k8s/overlays/dev
-```
 
-**验证**：
-
-```bash
-# 查看 Pod 状态（等所有 Pod Running）
+# ③ 等所有 Pod Running
 kubectl get pods -n marriott-dev -w
-
-# 查看所有资源
-kubectl get all -n marriott-dev
 ```
-
-预期：backend、frontend、postgres、redis 四个 Pod 都是 Running。
 
 **验证服务连通性（port-forward 绕过网关）**：
 
 ```bash
-# 端口转发：把本机 8080 转到集群里 backend Service
 kubectl port-forward -n marriott-dev svc/backend 8080:8080
 
 # 另开一个终端测试
 curl http://localhost:8080/healthz    # 期望 200 {"status":"ok"}
 curl http://localhost:8080/readyz     # 期望 200 {"status":"ready"}
-curl http://localhost:8080/api/items  # 期望返回商品列表
+curl http://localhost:8080/api/items  # 第一次 source=database，第二次 source=cache
 ```
 
 ### 第 3 步：部署 test 环境
 
 ```bash
-kubectl kustomize k8s/overlays/test   # 预览
-kubectl apply -k k8s/overlays/test    # 部署
-kubectl get pods -n marriott-test     # 验证
+cd /Users/babyyy/工作/marriott-devops
+
+# ① 预览
+kubectl kustomize k8s/overlays/test
+
+# ② 部署
+kubectl apply -k k8s/overlays/test
+
+# ③ 等 4 个 Pod Running
+kubectl get pods -n marriott-test -w
+
+# ④ 验证（和 dev 一样）
+kubectl port-forward -n marriott-test svc/backend 8080:8080
+curl http://localhost:8080/readyz     # {"status":"ready"}
+curl http://localhost:8080/api/items  # 返回商品列表
 ```
 
 ### 第 4 步：部署 perf 环境
 
 ```bash
-kubectl kustomize k8s/overlays/perf   # 预览（注意这次有 HPA、PDB、PriorityClass，副本数 3）
-kubectl apply -k k8s/overlays/perf    # 部署
-kubectl get pods -n marriott-perf     # 验证（backend 应该有 3 个副本）
+cd /Users/babyyy/工作/marriott-devops
+
+# ① 预览（这次有 HPA、PDB、PriorityClass，backend 3 副本 + frontend 2 副本）
+kubectl kustomize k8s/overlays/perf
+
+# ② 部署
+kubectl apply -k k8s/overlays/perf
+
+# ③ 等 Pod Running（backend 应有 3 个副本）
+kubectl get pods -n marriott-perf -w
+
+# ④ 验证 HPA 已创建
+kubectl get hpa -n marriott-perf
+
+# ⑤ 验证服务
+kubectl port-forward -n marriott-perf svc/backend 8080:8080
+curl http://localhost:8080/readyz     # {"status":"ready"}
 ```
 
 ### 第 5 步：部署 webhook
@@ -206,32 +218,51 @@ kubectl get pods -n marriott-perf     # 验证（backend 应该有 3 个副本�
 webhook 是独立的（不在 Kustomize 里，是单独的 yaml 文件）：
 
 ```bash
-# webhook 部署在自己的 namespace（webhook-system）
+cd /Users/babyyy/工作/marriott-devops
+
+# 部署（自动创建 webhook-system namespace）
 kubectl apply -f k8s/webhook/webhook.yaml
 
 # 验证
-kubectl get pods -n webhook-system
-kubectl get MutatingWebhookConfiguration
+kubectl get pods -n webhook-system          # 等 Pod Running
+kubectl get MutatingWebhookConfiguration    # 应看到 marriott-webhook
 ```
 
-> 注意：webhook 的证书依赖 cert-manager 自动签发，如果 cert-manager 工作正常，webhook Pod 会正常起来。
+> ⚠️ **重要**：webhook 是 Mutating Admission Webhook——**它会拦截集群里所有 Pod 创建请求**（加资源限制、加 team 标签、加 OTel 注解）。所以部署 webhook 后，**新创建的 Pod 都会经过它**。如果 webhook 异常，会影响后续所有环境部署。验证顺序：先确认 webhook Pod Running + WebhookConfiguration 就绪，再部署后面的环境。
+>
+> 注意：webhook 的证书依赖 cert-manager 自动签发（webhook.yaml 里用了 cert-manager.io/inject-ca-from）。
 
-### 第 6 步：staging / production（只验证不部署）
+### 第 6 步：staging / production（部分部署）
+
+**⚠️ 重要说明**：staging/prod 依赖云上 RDS + ESO（External Secrets），集群里**没装 ESO**，所以：
+
+- **production**：✅ **已部署（0 副本）**——所有资源（PDB/Service/Ingress/RBAC/NetworkPolicy/Istio 全套）已创建，只有 Deployment 副本数 = 0（云资源就绪后 Pod 不会起，避免连不上云库 CrashLoop）
+- **staging**：可部署（同样 0 副本方式）或只渲染验证
 
 ```bash
-# 只渲染验证，不 apply（因为依赖云上 RDS + ESO）
+cd /Users/babyyy/工作/marriott-devops
+
+# ① 只渲染验证
 kubectl kustomize k8s/overlays/staging
 kubectl kustomize k8s/overlays/production
 
 # 确认输出里：
 #   - 没有集群内 postgres/redis（已删除，指向云上）
-#   - DB_HOST 指向 rm-xxx-prod.mysql.rds.aliyuncs.com
+#   - DB_HOST 指向 rm-xxx.mysql.rds.aliyuncs.com
 #   - 有 ExternalSecret 和 SecretStore（ESO）
+
+# ② 如果部署 staging（和 production 一样 0 副本）：
+kubectl apply -k k8s/overlays/staging
+# 预期：ExternalSecret/SecretStore 创建失败（ESO 未装，正常），其他资源成功，Deployment 0 副本
 ```
+
+> 面试说明：「production 我部署了全部资源（PDB/Service/Ingress/RBAC/Istio），副本数设 0——因为云上 RDS 和 ESO 未就绪，Pod 起来连不上库会 CrashLoop。云资源到位后把副本数改回 3 即可。」
 
 ### 第 7 步：部署 Jenkins（K8s 里）
 
-Jenkins 用 Helm 部署，配置文件已经写好（`k8s/jenkins/values.yaml`）：
+**✅ 已部署（2026-08-19）**：Jenkins 已在集群里（jenkins-0 2/2 Running），访问地址 `http://172.16.20.113:31488`（NodePort），账号密码在 `k8s/jenkins/values.yaml`。**直接跳过**。
+
+如果你在新集群重来，用 Helm 部署（配置文件已写好）：
 
 ```bash
 # ① 添加 Jenkins Helm 仓库
@@ -284,26 +315,36 @@ CI/CD 流水线已经写好，两个 Jenkinsfile：
 
 ### 第 9 步：Istio 灰度发布（选做加分项）
 
-生产环境的灰度发布用 Istio（header 定向），配置文件在 `k8s/istio/`：
+生产环境的灰度发布用 Istio（header 定向），配置文件在 `k8s/istio/`（**已部署到集群，以下命令是讲解用途**）：
 
 ```bash
-# 1. 部署两个版本（blue 旧版 + green 新版，带 version 标签）
-#    （Jenkinsfile 的灰度发布会自动创建）
+cd /Users/babyyy/工作/marriott-devops
 
-# 2. 应用 Istio 灰度配置
-kubectl apply -f k8s/istio/destinationrule.yaml   # 定义 v1(blue)/v2(green) 子集
-kubectl apply -f k8s/istio/virtualservice.yaml    # header 路由规则
-kubectl apply -f k8s/istio/gateway.yaml           # 集群入口网关
+# 1. Istio 三件套（namespace 已写在 yaml 文件里，直接 apply 即可）
+kubectl apply -f k8s/istio/gateway.yaml           # → istio-system（和 ingressgateway 同 ns）
+kubectl apply -f k8s/istio/destinationrule.yaml   # → marriott-production（和 backend 同 ns）
+kubectl apply -f k8s/istio/virtualservice.yaml    # → marriott-production（header 灰度版）
 
-# 3. 验证灰度（带 header 访问新版，不带走旧版）
+# 2. 验证（注意：gateway 有歧义，用完整 CRD 名查）
+kubectl get gateways.networking.istio.io -n istio-system        # marriott-gateway
+kubectl get virtualservices.networking.istio.io -n marriott-production   # backend-route
+kubectl get destinationrules.networking.istio.io -n marriott-production  # backend-destination
+
+# 3. 灰度发布流程（Jenkins 自动做，手动演示时）
+#    a. 部署 green 新版（version: green 标签）
+#    b. 带 header 的测试组访问新版，其他走旧版
 curl -H "X-User-Group: beta" http://<gateway>/api/items   # 走 v2 新版
 curl http://<gateway>/api/items                            # 走 v1 旧版
 
-# 4. 测试通过后，全量切换
-kubectl apply -f k8s/istio/virtualservice-full.yaml        # 100% 流量切到 v2
+#    c. 测试通过后，全量切换（100% 流量切到 v2）
+kubectl apply -f k8s/istio/virtualservice-full.yaml
+
+#    d. 角色轮换：更新 blue 为新版本 → 恢复 header 路由 → 删 green
 ```
 
-> 灰度原理：VirtualService 按 header 路由——带 `X-User-Group: beta` 的测试组用户先访问新版，其他人走旧版。测试通过后，apply `virtualservice-full.yaml` 把 100% 流量切到新版，旧版保留作回滚点。详见 `k8s/istio/README.md`。
+> ⚠️ **kubectl 资源名歧义**：集群里有两个 Gateway CRD（Istio 的 `gateways.networking.istio.io` 和 Gateway API 的 `gateways.gateway.networking.k8s.io`）。`kubectl get gateway` 默认查的是 Gateway API 的，查 Istio 的要用**完整 CRD 名** `kubectl get gateways.networking.istio.io`。
+>
+> 灰度原理：VirtualService 按 header 路由——带 `X-User-Group: beta` 的测试组用户先访问新版，其他人走旧版。测试通过后 apply `virtualservice-full.yaml` 全量切换，旧版保留作回滚点，观察期后角色轮换。详见 `k8s/istio/README.md`。
 
 ---
 

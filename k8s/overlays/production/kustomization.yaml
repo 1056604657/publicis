@@ -16,12 +16,13 @@ images:
   - name: hub-sh.aijidou.com/base/marriott-frontend
     newTag: v1-amd64
 
-# 生产：3 副本起步，HPA 保证高可用
+# 生产：副本数设为 0（笔试场景不真跑业务——云上 RDS/ESO 未就绪，连不上库会 CrashLoop）
+# 所有资源（PDB/HPA/Service/Ingress）都完整创建，只是 Pod 不启动，符合「代码就绪待云资源」
 replicas:
   - name: backend
-    count: 3
+    count: 0
   - name: frontend
-    count: 2
+    count: 0
 
 patches:
   # 删除集群内 PostgreSQL（生产用云上 RDS）
@@ -81,6 +82,17 @@ patches:
       kind: NetworkPolicy
       metadata:
         name: redis-allow-backend
+  # 删除 HPA（production 0 副本，不需要扩缩容；云资源就绪后改回副本数并恢复 HPA）
+  # 说明：minReplicas=0 需要 Object/External 指标（K8s 限制），0 副本场景直接删 HPA 更干净
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: backend-hpa
+    patch: |-
+      $patch: delete
+      apiVersion: autoscaling/v2
+      kind: HorizontalPodAutoscaler
+      metadata:
+        name: backend-hpa
   # Ingress 域名（生产正式域名）+ cert-manager 正式证书
   - target:
       kind: Ingress

@@ -45,12 +45,22 @@ spec:
               mountPath: /var/lib/postgresql/data
             - name: postgres-init
               mountPath: /docker-entrypoint-initdb.d   # postgres 官方镜像首次启动时自动执行这里的 .sql
+          # 就绪探针：pg_isready 通了才接流量（用环境变量引用用户名，不硬编码）
           readinessProbe:
             exec:
-              # 用环境变量引用用户名，不硬编码（POSTGRES_USER 来自 Secret 的 DB_USER）
               command: ["sh", "-c", "pg_isready -U $POSTGRES_USER"]
             initialDelaySeconds: 5
             periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # 存活探针：postgres 进程僵死时用 liveness 兜底重启
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER"]
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
       volumes:
         - name: postgres-init
           configMap:

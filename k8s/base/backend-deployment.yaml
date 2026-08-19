@@ -37,20 +37,24 @@ spec:
                 name: app-config
             - secretRef:
                 name: app-secrets
-          # 存活探针：只检查进程
+          # 存活探针：只检查进程（显式超时和失败阈值，企业级规范）
           livenessProbe:
             httpGet:
               path: /healthz
               port: 8080
             initialDelaySeconds: 10
             periodSeconds: 10
-          # 就绪探针：检查 DB + Redis 连通
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # 就绪探针：检查 DB + Redis 连通（依赖挂了摘流量，不重启容器）
           readinessProbe:
             httpGet:
               path: /readyz
               port: 8080
             initialDelaySeconds: 5
             periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
           resources:
             requests:
               cpu: 100m

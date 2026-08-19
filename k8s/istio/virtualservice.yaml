@@ -12,6 +12,9 @@ metadata:
   name: backend-route
   namespace: marriott-production   # 和 backend 服务同 namespace，host 才能解析
 spec:
+  # 挂到外部入口 Gateway（没有这个字段则只在 mesh 内部生效，外部流量进不来）
+  gateways:
+    - marriott-gateway
   hosts:
     - backend.marriott-production.svc.cluster.local
   http:

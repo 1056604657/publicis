@@ -22,11 +22,22 @@ spec:
           image: hub-sh.aijidou.com/base/redis:7-alpine-amd64
           ports:
             - containerPort: 6379
+          # 就绪探针：redis-cli ping 通了才接流量
           readinessProbe:
             exec:
               command: ["redis-cli", "ping"]
             initialDelaySeconds: 5
             periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # 存活探针：进程僵死时 readiness 可能还通（TCP 能连但卡死），用 liveness 兜底重启
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
           resources:
             requests:
               cpu: 50m

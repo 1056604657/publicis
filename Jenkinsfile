@@ -48,8 +48,8 @@ def deployTo(envName, backendImage, frontendImage) {
 //   1. 部署 green 新版（version=green 标签，供 Istio subset 匹配）
 //   2. apply Istio 配置（DestinationRule 定义 v1/v2 子集 + header 路由）
 //   3. header 灰度：X-User-Group: beta → v2（测试组先验证，其他走 v1）
-//   4. 观察 green 健康度
-//   5. 测试通过 → 全量切换（100% 流量切到 v2），异常则回滚
+//   4. 检查 green Pod 就绪（readiness 探针）
+//   5. 人工确认：测试组验证通过 → 全量切换；不通过 → 回滚
 // ============================================================
 def progressiveDeploy(envName, backendImage) {
     def namespace = "marriott-${envName}"
@@ -97,26 +97,48 @@ EOF
         sleep 60
     """
 
-    // 3. 观察 green 版本健康度
+    // 3. 检查 green 版本 Pod 就绪（readiness 探针通过）
     def greenReady = sh(
         script: "kubectl get pods -n ${namespace} -l version=green -o jsonpath='{.items[?(@.status.containerStatuses[0].ready==true)].metadata.name}' | wc -l",
         returnStdout: true
     ).trim()
 
     if (greenReady.toInteger() < 1) {
-        echo "❌ green 版本异常，删除并回滚"
+        echo "❌ green 版本 Pod 未就绪，删除并回滚"
         sh "kubectl delete deployment backend-green -n ${namespace}"
-        error "灰度发布失败，已回滚"
+        error "灰度发布失败（green Pod 未就绪），已回滚"
     }
 
-    // 4. 测试通过 → 全量切换（100% 流量切到 green 新版）
+    // 4. 人工确认：测试组已通过 header 访问新版完成验证
+    //    测试通过 → 点「确认部署」→ 全量切换
+    //    测试不通过 → 点「回滚」→ 删除 green，流量保持 v1 旧版
+    echo "🟡 等待测试组人工验证 green 新版（测试组带 X-User-Group: beta 访问新版）"
+    def decision = input(
+        message: "测试组已验证 green 新版？通过则全量切换，不通过则回滚：",
+        parameters: [
+            choice(
+                name: 'TEST_RESULT',
+                choices: ['PASS（测试通过，全量切换）', 'FAIL（测试不通过，回滚）'],
+                description: '测试组人工验证结果'
+            )
+        ],
+        ok: '提交结果'
+    )
+
+    if (decision == 'FAIL（测试不通过，回滚）') {
+        echo "❌ 测试不通过，回滚：删除 green 版本，流量保持 v1 旧版"
+        sh "kubectl delete deployment backend-green -n ${namespace}"
+        error "灰度发布失败（测试不通过），已回滚，v1 旧版继续服务"
+    }
+
+    // 5. 测试通过 → 全量切换（100% 流量切到 green 新版）
     echo "✅ 测试通过，全量切换流量到 green 新版..."
     sh """
         kubectl apply -f k8s/istio/virtualservice-full.yaml
     """
     echo "✅ 灰度发布完成，100% 流量已切到 green 新版"
 
-    // 5. 旧版 blue 保留作回滚点，确认稳定后下线
+    // 6. 旧版 blue 保留作回滚点，确认稳定后下线
     sh "kubectl delete deployment backend-blue -n ${namespace} --ignore-not-found=true"
 }
 

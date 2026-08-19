@@ -131,35 +131,18 @@ kubectl apply -k k8s/overlays/dev
 
 ### 第 1 步：创建 namespace + 复制镜像拉取凭证
 
-**这一步很关键，漏了会导致所有 Pod 拉镜像失败（ImagePullBackOff）。**
+**✅ 已完成（2026-08-19 已执行）**：5 个 namespace 和 swr-secret 都已经在集群里了，这一步**直接跳过**，不用重复执行。
+
+验证一下确实就绪（只读检查）：
 
 ```bash
-# ① 创建 5 个 namespace（也可以直接 apply overlay，会自动创建）
-kubectl create namespace marriott-dev
-kubectl create namespace marriott-test
-kubectl create namespace marriott-perf
-kubectl create namespace marriott-staging
-kubectl create namespace marriott-production
-
-# ② 复制镜像拉取凭证到每个 namespace（必须！否则拉 hub-sh.aijidou.com 镜像会报 no basic auth）
-# 从 default namespace 的 swr-secret 复制（里面存了 Harbor 的登录凭证）
-for ns in dev test perf staging production; do
-  kubectl get secret swr-secret -n default -o jsonpath='{.data.\.dockerconfigjson}' | \
-    base64 -d > /tmp/dockerconfig.json
-  kubectl create secret generic swr-secret -n marriott-$ns \
-    --from-file=.dockerconfigjson=/tmp/dockerconfig.json \
-    --type=kubernetes.io/dockerconfigjson
-done
-
-# ③ 验证 secret 都创建好了
-kubectl get secret swr-secret -n marriott-dev
-kubectl get secret swr-secret -n marriott-test
-kubectl get secret swr-secret -n marriott-perf
-kubectl get secret swr-secret -n marriott-staging
-kubectl get secret swr-secret -n marriott-production
+kubectl get ns | grep marriott          # 应看到 5 个 Active
+kubectl get secret swr-secret -n marriott-dev   # 应看到 dockerconfigjson
 ```
 
-> ⚠️ **为什么必须这一步**：内网 Harbor（hub-sh.aijidou.com）拉镜像需要登录凭证，而 Secret 是 namespace 隔离的——default 的 swr-secret 不会被 marriott-dev 用到。所以每个 namespace 都要有自己的 swr-secret。deployment 里已经配了 `imagePullSecrets: swr-secret`，这里只是把 secret 创建出来。
+> 如果验证都通过，直接进第 2 步部署 dev 环境。下面是原始步骤（仅当你在新集群重新部署时参考）。
+
+---
 
 ### 第 2 步：部署 dev 环境
 
@@ -636,7 +619,23 @@ kubectl logs <pod名> -n marriott-dev   # 看是不是 database_unreachable 或 
 
 **解决**：等 postgres 和 redis 先 Running，backend 就绪探针自然通过。
 
-### 5.5 删除环境重来
+### 5.5 Pod 创建失败（FailedCreate: no PriorityClass found）
+
+**现象**：`kubectl get pods` 看不到 Pod，`kubectl describe deploy` 里 Events 报：
+
+```
+Error creating: pods "xxx-" is forbidden: no PriorityClass with name app-priority was found
+```
+
+**原因**：dev/test 环境的 overlay 删除了 PriorityClass（`$patch: delete`），但 base 的 deployment 里还写着 `priorityClassName: app-priority`。渲染出来的 Pod 引用了不存在的 PriorityClass，K8s 拒绝创建。
+
+**已修复**：dev/test 的 kustomization 里补了「删除 deployment 里的 priorityClassName 引用」的 patch。如果重新遇到，检查：
+
+```bash
+kubectl kustomize k8s/overlays/dev | grep priorityClassName   # 应该没有输出
+```
+
+### 5.6 删除环境重来
 
 ```bash
 kubectl delete -k k8s/overlays/dev   # 删除 dev 环境所有资源

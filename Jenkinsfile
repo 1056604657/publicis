@@ -44,18 +44,22 @@ def deployTo(envName, backendImage, frontendImage) {
 // 用 Istio 的 VirtualService 一套搞定，不需要蓝绿/金丝雀多套逻辑。
 //
 // 依赖：k8s/istio/ 下的 DestinationRule + VirtualService + Gateway
+//       （VirtualService 是常驻基线配置——平时就是「beta header → green、其他 → blue」，
+//        所以发布时不需要重新 apply，只需要创建 green Deployment 即可）
 // 流程：
 //   1. 部署 green 新版（version=green 标签，供 Istio subset 匹配）
-//   2. apply Istio 配置（DestinationRule 定义 v1/v2 子集 + header 路由）
-//   3. header 灰度：X-User-Group: beta → v2（测试组先验证，其他走 v1）
-//   4. 检查 green Pod 就绪（readiness 探针）
-//   5. 人工确认：测试组验证通过 → 全量切换；不通过 → 回滚
+//      （VirtualService 常驻，header 流量自动路由到 green）
+//   2. 检查 green Pod 就绪（readiness 探针）
+//   3. 人工确认：测试组验证通过 → 全量切换；不通过 → 回滚
+//   4. 全量切换：apply virtualservice-full（100% → green，全量验证窗口，此时 blue 是回滚点）
+//   5. 角色轮换：blue 更新成新镜像 → 恢复 header 路由 → 删 green
 // ============================================================
 def progressiveDeploy(envName, backendImage) {
     def namespace = "marriott-${envName}"
 
     sh """
         # 1. 部署 green 版本（version=green 标签，供 Istio subset 匹配）
+        #    VirtualService 是常驻基线（beta header → green、其他 → blue），无需重新 apply
         kubectl apply -f - <<EOF
 apiVersion: apps/v1
 kind: Deployment
@@ -88,12 +92,7 @@ spec:
             port: 8080
 EOF
 
-        # 2. 应用 Istio 配置（DestinationRule 定义 v1(blue)/v2(green) 子集 + header 路由）
-        kubectl apply -f k8s/istio/destinationrule.yaml
-        kubectl apply -f k8s/istio/virtualservice.yaml
-
-        echo "✅ Istio header 灰度已生效：X-User-Group: beta → v2 新版"
-        echo "   测试组用户带 header 先访问新版，其他用户仍走 v1 旧版"
+        # 2. 等 green 启动（给镜像拉取 + 启动时间）
         sleep 60
     """
 
@@ -148,9 +147,10 @@ EOF
     def newTag = backendImage.tokenize(':')[-1]
     sh """
         # 6.1 更新 blue 稳定版：sed 改 overlay 的 newTag + apply -k（走 Kustomize，配置即代码）
+        #     只改 backend 镜像的 newTag（精确匹配，不影响 frontend）
         #     用子 shell 隔离 cd，不改变当前工作目录
         (cd k8s/overlays/${envName} && \\
-         sed -i "s|newTag: .*|newTag: ${newTag}|g" kustomization.yaml && \\
+         sed -i "/marriott-backend/,+1{s|newTag: .*|newTag: ${newTag}|}" kustomization.yaml && \\
          kubectl apply -k .)
 
         # 6.2 恢复 header 路由（流量默认走 v1=blue，此时 blue 已是新版本）

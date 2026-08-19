@@ -138,8 +138,11 @@ EOF
     """
     echo "✅ 灰度发布完成，100% 流量已切到 green 新版"
 
-    // 6. 旧版 blue 保留作回滚点，确认稳定后下线
-    sh "kubectl delete deployment backend-blue -n ${namespace} --ignore-not-found=true"
+    // 6. 旧版 blue 保留作回滚点，不立即删除
+    //    生产实践：观察期（如 24-72h）确认新版本稳定后，再手动删除回滚点
+    echo "✅ backend-blue 保留作回滚点（当前 0 流量）"
+    echo "   观察期确认新版本稳定后，手动删除：kubectl delete deployment backend-blue -n ${namespace}"
+    echo "   若新版本有问题，可随时切回：kubectl apply -f k8s/istio/virtualservice.yaml"
 }
 
 // ============================================================

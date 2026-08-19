@@ -1,5 +1,6 @@
 # 多阶段构建：安装依赖阶段 → 精简运行阶段
-FROM python:3.12-slim AS builder
+# FROM 用内网 Harbor 镜像（Jenkins 构建节点无法访问 Docker Hub）
+FROM hub-sh.aijidou.com/base/python:3.12-slim-amd64 AS builder
 
 WORKDIR /app
 
@@ -8,7 +9,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt
 
 # 运行阶段：复用 builder 已装的包，保持镜像精简
-FROM python:3.12-slim
+FROM hub-sh.aijidou.com/base/python:3.12-slim-amd64
 
 # OCI 镜像 label：声明运行时语言（供 Mutating Webhook 自动识别做 OTel 注入）
 LABEL language="python"

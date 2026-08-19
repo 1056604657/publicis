@@ -1,5 +1,6 @@
 # 用 nginx-unprivileged 镜像（非 root 运行，监听 8080）
-FROM nginxinc/nginx-unprivileged:1.25-alpine
+# FROM 用内网 Harbor 镜像（Jenkins 构建节点无法访问 Docker Hub）
+FROM hub-sh.aijidou.com/base/nginx-unprivileged:1.25-alpine-amd64
 
 # 拷贝前端静态文件
 COPY index.html /usr/share/nginx/html/

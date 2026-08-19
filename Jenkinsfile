@@ -187,16 +187,16 @@ kind: Pod
 spec:
   containers:
   - name: docker
-    image: docker:24
+    image: hub-sh.aijidou.com/base/docker:24-amd64
     command: ['sleep', 'infinity']
     volumeMounts:
     - name: docker-sock
       mountPath: /var/run/docker.sock
   - name: python
-    image: python:3.12-slim
+    image: hub-sh.aijidou.com/base/python:3.12-slim-amd64
     command: ['sleep', 'infinity']
   - name: kubectl
-    image: bitnami/kubectl:latest
+    image: hub-sh.aijidou.com/base/kubectl:latest-amd64
     command: ['sleep', 'infinity']
   volumes:
   - name: docker-sock
@@ -347,7 +347,7 @@ spec:
                         // ① Trivy 高危漏洞扫描（HIGH/CRITICAL 直接失败）
                         sh '''
                             docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-                                aquasec/trivy image --severity HIGH,CRITICAL --exit-code 1 \
+                                hub-sh.aijidou.com/base/trivy:latest-amd64 image --severity HIGH,CRITICAL --exit-code 1 \
                                 ${BACKEND_IMAGE} || {
                                 echo "❌ 后端镜像存在高危漏洞，构建中止"
                                 exit 1
@@ -355,12 +355,12 @@ spec:
                         '''
                         sh '''
                             docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-                                aquasec/trivy image --severity HIGH,CRITICAL --exit-code 1 \
+                                hub-sh.aijidou.com/base/trivy:latest-amd64 image --severity HIGH,CRITICAL --exit-code 1 \
                                 ${FRONTEND_IMAGE} || exit 1
                         '''
                         sh '''
                             docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-                                aquasec/trivy image --severity HIGH,CRITICAL --exit-code 1 \
+                                hub-sh.aijidou.com/base/trivy:latest-amd64 image --severity HIGH,CRITICAL --exit-code 1 \
                                 ${WEBHOOK_IMAGE} || exit 1
                         '''
 

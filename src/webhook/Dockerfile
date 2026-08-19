@@ -1,4 +1,5 @@
-FROM python:3.12-slim
+# FROM 用内网 Harbor 镜像（Jenkins 构建节点无法访问 Docker Hub）
+FROM hub-sh.aijidou.com/base/python:3.12-slim-amd64
 
 # OCI 镜像 label：声明运行时语言（供 Mutating Webhook 自动识别做 OTel 注入）
 LABEL language="python"

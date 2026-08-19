@@ -10,6 +10,7 @@ apiVersion: networking.istio.io/v1
 kind: VirtualService
 metadata:
   name: backend-route
+  namespace: marriott-production   # 和 backend 服务同 namespace，host 才能解析
 spec:
   hosts:
     - backend.marriott-production.svc.cluster.local

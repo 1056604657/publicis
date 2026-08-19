@@ -7,6 +7,7 @@ apiVersion: networking.istio.io/v1
 kind: DestinationRule
 metadata:
   name: backend-destination
+  namespace: marriott-production   # 和 backend 服务同 namespace，host 才能解析
 spec:
   host: backend.marriott-production.svc.cluster.local
   subsets:

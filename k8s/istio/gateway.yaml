@@ -8,6 +8,7 @@ apiVersion: networking.istio.io/v1
 kind: Gateway
 metadata:
   name: marriott-gateway
+  namespace: istio-system   # 和 ingressgateway 同 namespace（selector 才能匹配到它）
 spec:
   selector:
     istio: ingressgateway   # 使用 istio-system 里已部署的 ingressgateway

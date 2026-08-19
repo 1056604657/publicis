@@ -28,7 +28,7 @@ resources:
   - postgres-init-configmap.yaml
   - redis-deployment.yaml
   - redis-service.yaml
-  - configmap.yaml
+  - backend-configmap.yaml
   - pdb.yaml
   - priorityclass.yaml
   - networkpolicy.yaml

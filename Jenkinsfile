@@ -138,11 +138,29 @@ EOF
     """
     echo "✅ 灰度发布完成，100% 流量已切到 green 新版"
 
-    // 6. 旧版 blue 保留作回滚点，不立即删除
-    //    生产实践：观察期（如 24-72h）确认新版本稳定后，再手动删除回滚点
-    echo "✅ backend-blue 保留作回滚点（当前 0 流量）"
-    echo "   观察期确认新版本稳定后，手动删除：kubectl delete deployment backend-blue -n ${namespace}"
-    echo "   若新版本有问题，可随时切回：kubectl apply -f k8s/istio/virtualservice.yaml"
+    // 6. 角色轮换：让 blue 接棒新版本，为下次灰度做准备
+    //    问题：如果 green 一直保留，下次灰度又部署 backend-green 会同名冲突
+    //    解决：把 base 的 backend（version: blue）更新成新镜像 → 成为新的稳定版 blue
+    //          然后删除 backend-green → 下次灰度再部署新的 green
+    //    顺序：先更新 blue → 恢复路由（流量切回 blue）→ 最后删 green（避免流量中断）
+    echo "✅ 灰度发布完成，开始角色轮换..."
+    // 从镜像名提取 tag（backend 和 frontend 都是 commit SHA，tag 相同）
+    def newTag = backendImage.tokenize(':')[-1]
+    sh """
+        # 6.1 更新 blue 稳定版：sed 改 overlay 的 newTag + apply -k（走 Kustomize，配置即代码）
+        #     用子 shell 隔离 cd，不改变当前工作目录
+        (cd k8s/overlays/${envName} && \\
+         sed -i "s|newTag: .*|newTag: ${newTag}|g" kustomization.yaml && \\
+         kubectl apply -k .)
+
+        # 6.2 恢复 header 路由（流量默认走 v1=blue，此时 blue 已是新版本）
+        kubectl apply -f k8s/istio/virtualservice.yaml
+
+        # 6.3 最后删除临时的 green 版本（下次灰度会重新部署新的 green）
+        kubectl delete deployment backend-green -n ${namespace} --ignore-not-found=true
+    """
+    echo "✅ 角色轮换完成：backend（blue）已更新为新版本，green 已清理"
+    echo "   下次灰度发布时：backend=blue（当前稳定版），新部署的 backend-green=新版"
 }
 
 // ============================================================

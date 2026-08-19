@@ -1,10 +1,17 @@
 # Terraform 主配置
 # Task 1：基础设施即代码（阿里云）
-# 5 套环境通过 workspace 区分，用 variables 参数化
 #
-# 使用方式：
-#   terraform workspace new dev
-#   terraform apply -var-file="environments/dev.tfvars"
+# 5 套环境（dev/test/perf/staging/production）用「workspace + tfvars」双机制区分：
+#   1. workspace：隔离每套环境的 state 文件（互不影响，防止误操作）
+#   2. tfvars：区分每套环境的配置值（规格、副本数等）
+#
+# 使用方式（以 dev 为例）：
+#   terraform workspace new dev        # 1. 创建 dev 的 workspace（隔离 state）
+#   terraform workspace select dev     # 2. 切到 dev workspace
+#   terraform plan -var-file="environments/dev.tfvars"    # 3. 预览（用 dev 的配置）
+#   terraform apply -var-file="environments/dev.tfvars"   # 4. 部署
+#
+# 5 个环境各自创建 workspace，state 天然隔离，配置用对应 tfvars 注入。
 
 terraform {
   required_version = ">= 1.5"
@@ -97,4 +104,17 @@ module "acr" {
 
   environment = var.environment
   repo_name   = "marriott"
+}
+
+# ============================================================
+# Kubernetes 集群 ACK（题目明确要求）
+# ============================================================
+module "ack" {
+  source = "./modules/ack"
+
+  environment          = var.environment
+  vpc_id               = module.vpc.vpc_id
+  vswitch_id           = module.vpc.vswitch_id
+  worker_instance_type = var.ack_worker_instance_type
+  worker_count         = var.ack_worker_count
 }

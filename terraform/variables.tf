@@ -35,3 +35,15 @@ variable "redis_instance_type" {
   type        = string
   default     = "redis.master.small.default"
 }
+
+variable "ack_worker_instance_type" {
+  description = "ACK Worker 节点规格"
+  type        = string
+  default     = "ecs.g6.large"
+}
+
+variable "ack_worker_count" {
+  description = "ACK Worker 节点数量"
+  type        = number
+  default     = 2
+}

@@ -7,22 +7,18 @@
 #   helm install jenkins jenkins/jenkins -f values.yaml -n jenkins
 
 controller:
-  # 内网镜像（已推到 Harbor）
-  # 注意：Jenkins chart 的 image 是 map 结构，要写 registry/repository/tag
   image:
     registry: "hub-sh.aijidou.com"
     repository: "base/jenkins"
     tag: "lts-amd64"
 
-  # 拉内网镜像的 secret（jenkins namespace 里已创建 swr-secret）
   imagePullSecretName: "swr-secret"
 
-  # Jenkins 管理员账号（新版 chart 用 admin.username/admin.password）
+
   admin:
     username: "admin"
     password: "admin123"  # 生产应改用 Secret 注入
 
-  # 资源限制
   resources:
     requests:
       cpu: "500m"
@@ -35,12 +31,10 @@ controller:
   serviceType: NodePort
   servicePort: 8080
 
-  # 健康检查
   healthProbes: true
   healthProbeLivenessTimeout: 5
   healthProbeReadinessTimeout: 5
 
-  # 安装常用插件（企业级流水线必需）
   installPlugins:
     - kubernetes:latest          # K8s 动态 Agent
     - workflow-aggregator:latest # Pipeline 插件集
@@ -53,7 +47,7 @@ controller:
     - kubernetes-cli:latest      # kubectl 集成
     - http_request:latest        # 飞书 webhook 调用
 
-  # JCasC（配置即代码）：流水线配置也代码化
+  # JCasC：流水线配置也代码化
   JCasC:
     enabled: true
     configScripts:
@@ -70,13 +64,11 @@ controller:
         repository: "base/k8s-sidecar"
         tag: "2.10.1-amd64"
 
-# 持久化：用集群的 nfs-storage
 persistence:
   enabled: true
   storageClass: "nfs-storage"
   size: "20Gi"
 
-# Agent：用 K8s 动态创建，构建完销毁
 agent:
   enabled: true
   image:
@@ -84,12 +76,10 @@ agent:
     repository: "base/jenkins"
     tag: "lts"
 
-# ServiceAccount：Jenkins 需要权限部署到集群
 serviceAccount:
   create: true
   name: jenkins
   annotations: {}
 
-# 需要 RBAC 授权（Jenkins 要能 kubectl apply 到业务 namespace）
 rbac:
   create: true

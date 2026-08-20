@@ -1,7 +1,4 @@
-# Ingress（域名由 overlay 覆盖）
-# 注意：cert-manager annotation 不写在这里（base），因为：
-#   - dev/test/perf 用 selfsigned 或不配 TLS
-#   - staging/production 用 letsencrypt-prod
+# Ingress
 # 各 overlay 通过 patch 加对应的 cert-manager annotation
 apiVersion: networking.k8s.io/v1
 kind: Ingress

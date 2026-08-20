@@ -1,5 +1,5 @@
-# 应用配置 ConfigMap（12-factor：配置和代码分离）
-# 敏感信息（密码）放 Secret，非敏感配置放这里
+# 应用配置 ConfigMap
+# 敏感信息（密码）放 Secret
 apiVersion: v1
 kind: ConfigMap
 metadata:

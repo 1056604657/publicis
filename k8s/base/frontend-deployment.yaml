@@ -1,5 +1,4 @@
 # 前端 Deployment
-# 用 nginx-unprivileged 镜像（非 root 运行，监听 8080，配合 runAsNonRoot）
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,16 +16,12 @@ spec:
         app: frontend
     spec:
       priorityClassName: app-priority
-      # 用独立 ServiceAccount（最小权限）
       serviceAccountName: frontend
-      # 拉内网 Harbor 镜像的凭证
       imagePullSecrets:
         - name: swr-secret
-      # nginx-unprivileged 以非 root 运行（UID=101），与镜像对齐
       securityContext:
         runAsNonRoot: true
         runAsUser: 101
-      # Pod 跨节点分布：单节点故障时副本不会被全打死
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
@@ -47,7 +42,6 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 2
             failureThreshold: 3
-          # 就绪探针：nginx 能响应才接流量（防止滚动更新时新 Pod 没就绪就被打流量）
           readinessProbe:
             httpGet:
               path: /healthz

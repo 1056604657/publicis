@@ -1,4 +1,3 @@
-# 后端 Deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -6,7 +5,7 @@ metadata:
   labels:
     app: backend
 spec:
-  replicas: 1  # overlay 可覆盖（perf/staging/prod 提高）
+  replicas: 1
   selector:
     matchLabels:
       app: backend
@@ -14,23 +13,15 @@ spec:
     metadata:
       labels:
         app: backend
-        version: blue    # 默认就是「蓝」旧版，灰度发布时部署 green 新版，Istio 用 version 标签区分
+        version: blue
     spec:
-      # 关键服务优先调度（配合 PriorityClass）
       priorityClassName: app-priority
-      # 用独立 ServiceAccount（不用 default，最小权限）
       serviceAccountName: backend
-      # 拉内网 Harbor 镜像的凭证（swr-secret，部署时需先在各 namespace 创建）
       imagePullSecrets:
         - name: swr-secret
-      # 非 root 运行（镜像里已是 appuser，UID=1000）
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
-      # Pod 跨节点分布：单节点故障时副本不会被全打死
-      #   maxSkew=1：节点间副本数差不超过 1
-      #   topologyKey=hostname：以节点维度分布
-      #   whenUnsatisfiable=ScheduleAnyway：不满足时尽量调度（避免 2 节点集群无法调度）
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
@@ -48,7 +39,6 @@ spec:
                 name: app-config
             - secretRef:
                 name: app-secrets
-          # 存活探针：只检查进程（显式超时和失败阈值，企业级规范）
           livenessProbe:
             httpGet:
               path: /healthz
@@ -57,7 +47,6 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 2
             failureThreshold: 3
-          # 就绪探针：检查 DB + Redis 连通（依赖挂了摘流量，不重启容器）
           readinessProbe:
             httpGet:
               path: /readyz

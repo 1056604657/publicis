@@ -11,5 +11,5 @@ spec:
   ports:
     - name: http
       port: 80
-      targetPort: 8080    # 指向 nginx-unprivileged 的 8080 端口
+      targetPort: 8080
   type: ClusterIP

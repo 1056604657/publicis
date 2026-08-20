@@ -21,24 +21,67 @@
 //   SONAR_TOKEN        SonarQube token
 //   SKIP_SONAR         显式跳过 SonarQube 门控（默认 false，强制扫描）
 //   SKIP_E2E           显式跳过 E2E 测试（默认 false，强制跑）
+//   GIT_HTTP_PROXY     git push 用的代理（GitHub 走代理，与集群内 checkout 一致）
+// Jenkins 凭证：
+//   harbor-credentials Harbor 账号密码（docker login，必填）
+//   github-credentials GitHub 账号/Token（git push 写回 tag 用，必填）
 // ============================================================
 
 // ============================================================
-// 部署函数：用 Kustomize 方式部署（保持与 K8s 配置管理一致）
-// 做法：kustomize edit set image 临时改 tag → kubectl apply -k
-// CI 工作区每次都是干净 clone，改完无需恢复
+// 部署函数：Kustomize 方式部署（保持与 K8s 配置管理一致），GitOps 雏形
+// 流程：
+//   1. python 容器：scripts/update-image-tag.py 结构化更新 overlay 的 newTag
+//      （按镜像名精确匹配，替代 sed——sed 会一把梭改所有 newTag 且依赖 YAML 行序）
+//   2. kubectl 容器：kubectl apply -k（kubectl 内置 kustomize 渲染，不需要独立 kustomize）
+//   3. jnlp 容器：把新 tag 写回 git（git 是事实来源，可审计可复现；[ci skip] 防循环触发）
 // ============================================================
 def deployTo(envName, backendImage, frontendImage) {
     // 从镜像名提取 tag（backend 和 frontend 都是 commit SHA，tag 相同）
-    // 用 sed 改 overlay 的 newTag，不依赖独立的 kustomize 二进制（bitnami/kubectl 容器里没有 kustomize edit）
     def imageTag = backendImage.tokenize(':')[-1]
-    sh """
-        cd k8s/overlays/${envName}
-        # 把 overlay 里所有 newTag 改成 commit SHA（backend/frontend 共用同一个 commit SHA）
-        sed -i "s|newTag: .*|newTag: ${imageTag}|g" kustomization.yaml
-        # kubectl apply -k（kubectl 内置 kustomize 渲染能力，不需要独立 kustomize）
-        kubectl apply -k .
-    """
+    // 1. 结构化更新 overlay 镜像 tag（ruamel.yaml 保留注释和格式，git diff 只有目标行）
+    container('python') {
+        sh """
+            pip install -q -i https://mirrors.aliyun.com/pypi/simple/ ruamel.yaml
+            python scripts/update-image-tag.py k8s/overlays/${envName}/kustomization.yaml \\
+                "hub-sh.aijidou.com/base/marriott-backend=${imageTag}" \\
+                "hub-sh.aijidou.com/base/marriott-frontend=${imageTag}"
+        """
+    }
+    // 2. 部署（kubectl 内置 kustomize 渲染能力，不需要独立 kustomize 二进制）
+    container('kubectl') {
+        sh "kubectl apply -k k8s/overlays/${envName}"
+    }
+    // 3. 写回 git（GitOps：git 是事实来源；[ci skip] 防止 commit 触发流水线循环）
+    commitAndPush("部署 ${envName}：镜像更新到 ${imageTag}")
+}
+
+// ============================================================
+// 写回 git（GitOps 雏形）：把 overlay 的 newTag 变更提交并 push 到远程
+//  - git 成为事实来源：审计「生产跑哪个版本」直接看 git，不需要查集群
+//  - commit message 带 [ci skip]，避免 push 触发 webhook 造成流水线循环
+//  - 幂等兜底：tag 没变化时 git commit 无变更，跳过 push（第二次构建不会死循环）
+// ============================================================
+def commitAndPush(message) {
+    // 从 SCM 检出信息里取分支名（origin/main → main）
+    def branchName = (env.GIT_BRANCH ?: 'origin/main').tokenize('/').last()
+    withCredentials([usernamePassword(
+        credentialsId: 'github-credentials',
+        usernameVariable: 'GIT_USER',
+        passwordVariable: 'GIT_PASSWORD'
+    )]) {
+        sh """
+            git config user.email "marriott-ci@example.com"
+            git config user.name "Marriott CI"
+            if [ -n "${env.GIT_HTTP_PROXY ?: ''}" ]; then
+                git config http.proxy "${env.GIT_HTTP_PROXY}"
+            fi
+            # 只提交 overlay 目录（避免误提交工作区其他文件）
+            git add k8s/overlays
+            git commit -m "${message} [ci skip]" || echo "⚠️ 没有变更需要提交（tag 未变化），跳过 push"
+            # 用 credential.helper 注入 push 凭证（不把密码写进 URL，避免日志泄露）
+            git -c credential.helper='!f() { echo username=\$GIT_USER; echo password=\$GIT_PASSWORD; }; f' push origin ${branchName}
+        """
+    }
 }
 
 // ============================================================
@@ -61,10 +104,11 @@ def progressiveDeploy(envName, backendImage) {
     def namespace = "marriott-${envName}"
 
     // 渐进式发布：先 header 灰度让「测试组」访问新版，全量切换后再角色轮换
-    sh """
-        # 1. 部署 green 版本（version=green 标签，供 Istio subset 匹配）
-        #    VirtualService 是常驻基线（beta header → green、其他 → blue），无需重新 apply
-        kubectl apply -f - <<EOF
+    // 1. 部署 green 版本（version=green 标签，供 Istio subset 匹配）
+    //    VirtualService 是常驻基线（beta header → green、其他 → blue），无需重新 apply
+    container('kubectl') {
+        sh """
+            kubectl apply -f - <<EOF
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -95,14 +139,19 @@ spec:
             path: /readyz
             port: 8080
 EOF
+        """
+    }
 
-        # 2. 用 kubectl wait 替代硬编码 sleep 60——等到 Pod Ready 才继续
-        #    timeout 300 秒 = 5 分钟，给镜像拉取 + 启动足够时间；超时自动失败
-        kubectl wait --for=condition=ready \\
-            pod -l app=backend,version=green \\
-            -n ${namespace} \\
-            --timeout=300s
-    """
+    // 2. 用 kubectl wait 替代硬编码 sleep 60——等到 Pod Ready 才继续
+    //    timeout 300 秒 = 5 分钟，给镜像拉取 + 启动足够时间；超时自动失败
+    container('kubectl') {
+        sh """
+            kubectl wait --for=condition=ready \\
+                pod -l app=backend,version=green \\
+                -n ${namespace} \\
+                --timeout=300s
+        """
+    }
 
     // 3. 检查 green 版本 Pod 数量（kubectl wait 已经保证至少 1 个 ready，这里再校验一次）
     def greenReady = sh(
@@ -112,7 +161,9 @@ EOF
 
     if (greenReady.toInteger() < 1) {
         echo "❌ green 版本 Pod 未就绪，删除并回滚"
-        sh "kubectl delete deployment backend-green -n ${namespace} --ignore-not-found=true"
+        container('kubectl') {
+            sh "kubectl delete deployment backend-green -n ${namespace} --ignore-not-found=true"
+        }
         error "灰度发布失败（green Pod 未就绪），已回滚"
     }
 
@@ -134,15 +185,19 @@ EOF
 
     if (decision == 'FAIL（测试不通过，回滚）') {
         echo "❌ 测试不通过，回滚：删除 green 版本，流量保持 v1 旧版"
-        sh "kubectl delete deployment backend-green -n ${namespace}"
+        container('kubectl') {
+            sh "kubectl delete deployment backend-green -n ${namespace}"
+        }
         error "灰度发布失败（测试不通过），已回滚，v1 旧版继续服务"
     }
 
     // 5. 测试通过 → 全量切换（100% 流量切到 green 新版）
     echo "✅ 测试通过，全量切换流量到 green 新版..."
-    sh """
-        kubectl apply -f k8s/istio/virtualservice-full.yaml
-    """
+    container('kubectl') {
+        sh """
+            kubectl apply -f k8s/istio/virtualservice-full.yaml
+        """
+    }
     echo "✅ 灰度发布完成，100% 流量已切到 green 新版"
 
     // 6. 角色轮换：让 blue 接棒新版本，为下次灰度做准备
@@ -153,20 +208,28 @@ EOF
     echo "✅ 灰度发布完成，开始角色轮换..."
     // 从镜像名提取 tag（backend 和 frontend 都是 commit SHA，tag 相同）
     def newTag = backendImage.tokenize(':')[-1]
-    sh """
-        # 6.1 更新 blue 稳定版：sed 改 overlay 的 newTag + apply -k（走 Kustomize，配置即代码）
-        #     只改 backend 镜像的 newTag（精确匹配，不影响 frontend）
-        #     用子 shell 隔离 cd，不改变当前工作目录
-        (cd k8s/overlays/${envName} && \\
-         sed -i "/marriott-backend/,+1{s|newTag: .*|newTag: ${newTag}|}" kustomization.yaml && \\
-         kubectl apply -k .)
-
-        # 6.2 恢复 header 路由（流量默认走 v1=blue，此时 blue 已是新版本）
-        kubectl apply -f k8s/istio/virtualservice.yaml
-
-        # 6.3 最后删除临时的 green 版本（下次灰度会重新部署新的 green）
-        kubectl delete deployment backend-green -n ${namespace} --ignore-not-found=true
-    """
+    // 6.1 更新 blue 稳定版：结构化更新 overlay 的 newTag（按镜像名精确匹配，只改 backend 不影响 frontend）
+    container('python') {
+        sh """
+            pip install -q -i https://mirrors.aliyun.com/pypi/simple/ ruamel.yaml
+            python scripts/update-image-tag.py k8s/overlays/${envName}/kustomization.yaml \\
+                "hub-sh.aijidou.com/base/marriott-backend=${newTag}"
+        """
+    }
+    // 6.2 应用 blue 更新（走 Kustomize，配置即代码）
+    container('kubectl') {
+        sh "kubectl apply -k k8s/overlays/${envName}"
+    }
+    // 6.3 写回 git（git 是事实来源，可审计；[ci skip] 防循环）
+    commitAndPush("角色轮换 ${envName}：blue 更新到 ${newTag}")
+    // 6.4 恢复 header 路由（流量默认走 v1=blue，此时 blue 已是新版本）
+    container('kubectl') {
+        sh "kubectl apply -f k8s/istio/virtualservice.yaml"
+    }
+    // 6.5 最后删除临时的 green 版本（下次灰度会重新部署新的 green）
+    container('kubectl') {
+        sh "kubectl delete deployment backend-green -n ${namespace} --ignore-not-found=true"
+    }
     echo "✅ 角色轮换完成：backend（blue）已更新为新版本，green 已清理"
     echo "   下次灰度发布时：backend=blue（当前稳定版），新部署的 backend-green=新版"
 }
@@ -453,14 +516,12 @@ spec:
         // ============ Stage 9: 自动部署 dev/test/perf ============
         stage('Deploy Dev/Test/Perf') {
             steps {
-                container('kubectl') {
-                    script {
-                        echo "自动部署到 dev/test/perf 环境..."
-                        deployTo('dev', BACKEND_IMAGE, FRONTEND_IMAGE)
-                        deployTo('test', BACKEND_IMAGE, FRONTEND_IMAGE)
-                        deployTo('perf', BACKEND_IMAGE, FRONTEND_IMAGE)
-                        echo "✅ dev/test/perf 自动部署完成"
-                    }
+                script {
+                    echo "自动部署到 dev/test/perf 环境..."
+                    deployTo('dev', BACKEND_IMAGE, FRONTEND_IMAGE)
+                    deployTo('test', BACKEND_IMAGE, FRONTEND_IMAGE)
+                    deployTo('perf', BACKEND_IMAGE, FRONTEND_IMAGE)
+                    echo "✅ dev/test/perf 自动部署完成"
                 }
             }
         }
@@ -473,11 +534,7 @@ spec:
                     notifyFeishu("🔔 [审批请求] 业务服务 ${GIT_COMMIT.take(8)} 待部署到 staging 环境，请到 Jenkins 审批")
                     // 人工审批
                     input message: '是否部署到 staging 环境？', ok: '部署'
-                }
-                container('kubectl') {
                     deployTo('staging', BACKEND_IMAGE, FRONTEND_IMAGE)
-                }
-                script {
                     notifyFeishu("✅ staging 部署完成")
                 }
             }
@@ -490,12 +547,8 @@ spec:
                     // 生产部署只允许从 tag 触发，且需要二次审批
                     notifyFeishu("🚨 [生产审批] ${GIT_COMMIT.take(8)} 待部署到 production，请审批")
                     input message: '生产部署需二次确认，确认部署？', ok: '确认部署'
-                }
-                container('kubectl') {
                     // 生产环境用 Istio header 灰度（测试组先验证，通过后全量切换）
                     progressiveDeploy('production', BACKEND_IMAGE)
-                }
-                script {
                     notifyFeishu("✅ production 部署完成")
                 }
             }

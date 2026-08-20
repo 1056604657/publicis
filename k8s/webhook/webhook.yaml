@@ -7,6 +7,13 @@ kind: Namespace
 metadata:
   name: webhook-system
 ---
+# 1.5 webhook 专用 ServiceAccount（不与业务 SA 混用）
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mutate-webhook
+  namespace: webhook-system
+---
 # 2. webhook Deployment
 apiVersion: apps/v1
 kind: Deployment
@@ -25,6 +32,13 @@ spec:
       labels:
         app: mutate-webhook
     spec:
+      # 拉内网 Harbor 镜像凭证（webhook-system namespace 需要先创建 swr-secret）
+      imagePullSecrets:
+        - name: swr-secret
+      # 用独立 ServiceAccount（不与业务 SA 混用，最小权限）
+      serviceAccountName: mutate-webhook
+      # webhook 是基础设施组件，给中等优先级（高于 default Job/Deployments）
+      priorityClassName: system-cluster-critical
       containers:
         - name: webhook
           image: hub-sh.aijidou.com/base/marriott-webhook:v1-amd64
@@ -40,6 +54,21 @@ spec:
               value: "500m"
             - name: DEFAULT_MEM_LIMIT
               value: "512Mi"
+          # 非 root 运行（镜像里已声明 USER，集群 PSA 强制）
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
           readinessProbe:
             httpGet:
               path: /healthz
@@ -47,6 +76,17 @@ spec:
               scheme: HTTPS
             initialDelaySeconds: 5
             periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
       volumes:
         - name: cert
           secret:

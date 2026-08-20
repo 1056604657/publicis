@@ -1,4 +1,5 @@
-# HPA 水平自动扩缩容（perf/staging/prod 环境启用，dev/test 可关闭）
+# HPA 水平自动扩缩容（perf/staging/prod 环境启用，dev/test 关闭）
+# behavior 防抖：扩容立即响应，缩容冷却 5 分钟（避免流量短抖动反复扩缩）
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -23,3 +24,24 @@ spec:
         target:
           type: Utilization
           averageUtilization: 80
+  # 防抖策略：
+  #   - 扩容：立即响应（pod 启动慢，宁可提前扩）
+  #   - 缩容：冷却 5 分钟（避免短抖动反复扩缩，也给 readiness/load balancer 留同步时间）
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100              # 一次最多翻倍
+          periodSeconds: 30
+        - type: Pods
+          value: 4                # 30 秒内最多加 4 个 pod（兜底，避免百分比太小扩容太慢）
+          periodSeconds: 30
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 10               # 5 分钟内最多缩 10%（避免激进缩容）
+          periodSeconds: 60
+      selectPolicy: Min

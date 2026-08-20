@@ -5,19 +5,22 @@
 //   1. Checkout          代码检出
 //   2. Code Scan         代码静态扫描（SonarQube）
 //   3. Unit Test         单元测试
-//   4. Dependency Scan   依赖漏洞扫描（Dependency-Check）
-//   5. Build Image       构建镜像（多阶段构建）
-//   6. Image Scan        镜像合规检查（Trivy 高危漏洞 + 非 root）
-//   7. Push Image        推送到内网 Harbor
-//   8. Deploy Dev/Test/Perf   自动部署
-//   9. Deploy Staging/Prod    人工审批 + 飞书通知
+//   4. E2E Test          端到端测试（docker-compose 拉起三层应用，curl 验证）
+//   5. Dependency Scan   依赖漏洞扫描（Dependency-Check）
+//   6. Build Image       构建镜像（多阶段构建）
+//   7. Image Scan        镜像合规检查（Trivy 高危漏洞 + 非 root）
+//   8. Push Image        推送到内网 Harbor
+//   9. Deploy Dev/Test/Perf   自动部署
+//  10. Deploy Staging/Prod    人工审批 + 飞书通知
 //
 // 环境变量（Jenkins 里配置）：
 //   HARBOR_REGISTRY   内网 Harbor 地址（hub-sh.aijidou.com/base）
-//   HARBOR_CREDENTIALS Jenkins 凭证 ID（docker 登录）
+//   HARBOR_CREDENTIALS Jenkins 凭证 ID（docker 登录，必填）
 //   FEISHU_WEBHOOK     飞书机器人 webhook 地址
 //   SONAR_HOST_URL     SonarQube 地址
 //   SONAR_TOKEN        SonarQube token
+//   SKIP_SONAR         显式跳过 SonarQube 门控（默认 false，强制扫描）
+//   SKIP_E2E           显式跳过 E2E 测试（默认 false，强制跑）
 // ============================================================
 
 // ============================================================
@@ -57,6 +60,7 @@ def deployTo(envName, backendImage, frontendImage) {
 def progressiveDeploy(envName, backendImage) {
     def namespace = "marriott-${envName}"
 
+    // 渐进式发布：先 header 灰度让「测试组」访问新版，全量切换后再角色轮换
     sh """
         # 1. 部署 green 版本（version=green 标签，供 Istio subset 匹配）
         #    VirtualService 是常驻基线（beta header → green、其他 → blue），无需重新 apply
@@ -92,11 +96,15 @@ spec:
             port: 8080
 EOF
 
-        # 2. 等 green 启动（给镜像拉取 + 启动时间）
-        sleep 60
+        # 2. 用 kubectl wait 替代硬编码 sleep 60——等到 Pod Ready 才继续
+        #    timeout 300 秒 = 5 分钟，给镜像拉取 + 启动足够时间；超时自动失败
+        kubectl wait --for=condition=ready \\
+            pod -l app=backend,version=green \\
+            -n ${namespace} \\
+            --timeout=300s
     """
 
-    // 3. 检查 green 版本 Pod 就绪（readiness 探针通过）
+    // 3. 检查 green 版本 Pod 数量（kubectl wait 已经保证至少 1 个 ready，这里再校验一次）
     def greenReady = sh(
         script: "kubectl get pods -n ${namespace} -l version=green -o jsonpath='{.items[?(@.status.containerStatuses[0].ready==true)].metadata.name}' | wc -l",
         returnStdout: true
@@ -104,7 +112,7 @@ EOF
 
     if (greenReady.toInteger() < 1) {
         echo "❌ green 版本 Pod 未就绪，删除并回滚"
-        sh "kubectl delete deployment backend-green -n ${namespace}"
+        sh "kubectl delete deployment backend-green -n ${namespace} --ignore-not-found=true"
         error "灰度发布失败（green Pod 未就绪），已回滚"
     }
 
@@ -236,22 +244,19 @@ spec:
         }
 
         // ============ Stage 2: 代码静态扫描（SonarQube）============
+        // SKIP_SONAR=true 时显式跳过（默认 false，强制扫描——不静默兜底）
+        // 生产环境不允许跳过：quality gate 必须有结果
         stage('Code Scan') {
+            when {
+                not { environment name: 'SKIP_SONAR', value: 'true' }
+            }
             steps {
                 container('python') {
                     script {
                         echo "开始 SonarQube 代码扫描..."
-                        // 检测 SonarQube 是否配置；没配（集群里没装 SonarQube）就跳过，不让流水线卡死
-                        def sonarConfigured = false
-                        try {
-                            // withSonarQubeEnv 只有在 Jenkins 配置了 SonarQube 服务器时才可用
-                            withSonarQubeEnv('sonarqube') {
-                                sonarConfigured = true
-                            }
-                        } catch (Exception e) {
-                            sonarConfigured = false
-                        }
-                        if (sonarConfigured) {
+                        // withSonarQubeEnv 必须配置 SonarQube 服务器，否则会抛 AbortException
+                        // 这里不 try-catch 静默跳过：配置缺失就失败（强制门控）
+                        withSonarQubeEnv('sonarqube') {
                             sh '''
                                 cd src/backend
                                 pip install -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt
@@ -260,11 +265,15 @@ spec:
                                     -Dsonar.sources=. \\
                                     -Dsonar.python.version=3
                             '''
-                            echo "✅ 代码扫描完成"
-                        } else {
-                            echo "⚠️ 集群未部署 SonarQube，跳过代码扫描"
-                            echo "   提示：生产环境部署 SonarQube 后，在 Jenkins 里配置 sonarqube 服务器即可启用此阶段"
                         }
+                        // 等待 Quality Gate（超时 5 分钟，避免永远 Pending）
+                        timeout(time: 5, unit: 'MINUTES') {
+                            def qg = waitForQualityGate()
+                            if (qg.status != 'OK') {
+                                error "❌ SonarQube Quality Gate 失败：${qg.status}"
+                            }
+                        }
+                        echo "✅ 代码扫描完成（Quality Gate OK）"
                     }
                 }
             }
@@ -291,37 +300,75 @@ spec:
             }
         }
 
-        // ============ Stage 4: 依赖漏洞扫描（Dependency-Check）============
-        stage('Dependency Scan') {
+        // ============ Stage 4: 端到端测试（docker-compose 三层链路）============
+        // 用项目根目录的 docker-compose.yml 拉起三层应用，验证缓存+DB 链路
+        // SKIP_E2E=true 时显式跳过（默认 false，强制跑，避免静默跳过）
+        stage('E2E Test') {
+            when {
+                not { environment name: 'SKIP_E2E', value: 'true' }
+            }
             steps {
-                container('python') {
+                container('docker') {
                     script {
-                        echo "开始依赖漏洞扫描..."
-                        // 检测 Dependency-Check 工具是否安装；没装就跳过，不让流水线卡死
-                        def dcInstalled = false
-                        try {
-                            dependencyCheck additionalArguments: '''--version''', odcInstallation: 'dependency-check'
-                            dcInstalled = true
-                        } catch (Exception e) {
-                            dcInstalled = false
-                        }
-                        if (dcInstalled) {
-                            dependencyCheck additionalArguments: '''
-                                --scan src/backend/requirements.txt
-                                --format HTML
-                                --failOnCVSS 7
-                            ''', odcInstallation: 'dependency-check'
-                            echo "✅ 依赖扫描完成（无 CVSS>=7 的高危漏洞）"
-                        } else {
-                            echo "⚠️ 未安装 Dependency-Check 工具，跳过依赖漏洞扫描"
-                            echo "   提示：安装 OWASP Dependency-Check 插件并在全局工具里配置后即可启用"
-                        }
+                        echo "开始 E2E 测试（docker-compose 拉起三层应用）..."
+                        sh '''
+                            set -e
+                            cd ${WORKSPACE}
+                            # 拉起三层应用（后端依赖 DB/Redis 健康才能 start）
+                            docker-compose up -d
+                            # 等应用就绪（最多等 90 秒，避免硬编码 sleep）
+                            for i in $(seq 1 18); do
+                                if curl -fsS http://localhost:8080/healthz >/dev/null 2>&1; then
+                                    echo "✅ backend 已就绪（第 ${i} 次探测）"
+                                    break
+                                fi
+                                echo "⏳ 等待 backend 就绪... ${i}/18"
+                                sleep 5
+                            done
+                            # 1. 存活探针
+                            curl -fsS http://localhost:8080/healthz | grep -q '"status":"ok"' || { echo "❌ /healthz 失败"; exit 1; }
+                            # 2. 就绪探针（验证 DB + Redis 连通）
+                            curl -fsS http://localhost:8080/readyz  | grep -q '"status":"ready"' || { echo "❌ /readyz 失败"; exit 1; }
+                            # 3. 缓存链路（第一次 database，第二次 cache——这是核心业务逻辑）
+                            FIRST=$(curl -fsS http://localhost:8080/api/items | grep -o '"source":"[^"]*"' | head -1)
+                            SECOND=$(curl -fsS http://localhost:8080/api/items | grep -o '"source":"[^"]*"' | head -1)
+                            echo "第一次请求: ${FIRST}    第二次请求: ${SECOND}"
+                            # 至少有一次是 cache（命中缓存验证 Redis 工作正常）
+                            echo "${FIRST} ${SECOND}" | grep -q 'cache' || { echo "❌ 缓存未命中，Redis 链路异常"; exit 1; }
+                            # 清理（保留 -v 避免磁盘残留）
+                            docker-compose down -v
+                            echo "✅ E2E 测试通过（健康检查 + 缓存链路验证）"
+                        '''
                     }
                 }
             }
         }
 
-        // ============ Stage 5: 构建镜像 ============
+        // ============ Stage 5: 依赖漏洞扫描（Dependency-Check）============
+        // CVSS>=7 的高危漏洞直接失败——这是安全门控，不能 try-catch 跳过
+        stage('Dependency Scan') {
+            steps {
+                container('python') {
+                    script {
+                        echo "开始依赖漏洞扫描..."
+                        // 不做 try-catch 静默兜底：插件缺失或工具未配置直接失败
+                        // 真正跳过只能通过 disable stage（Jenkins job 配置里关掉此 stage）
+                        dependencyCheck additionalArguments: '''
+                            --scan src/backend/requirements.txt
+                            --format HTML
+                            --format XML
+                            --failOnCVSS 7
+                            --failOnCannotParse
+                        ''', odcInstallation: 'dependency-check'
+                        // 发布报告到 Jenkins UI
+                        dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+                        echo "✅ 依赖扫描完成（无 CVSS>=7 的高危漏洞）"
+                    }
+                }
+            }
+        }
+
+        // ============ Stage 6: 构建镜像 ============
         stage('Build Image') {
             steps {
                 container('docker') {
@@ -337,7 +384,7 @@ spec:
             }
         }
 
-        // ============ Stage 6: 镜像合规检查（Trivy + 非 root）============
+        // ============ Stage 7: 镜像合规检查（Trivy + 非 root）============
         stage('Image Scan') {
             steps {
                 container('docker') {
@@ -378,41 +425,32 @@ spec:
             }
         }
 
-        // ============ Stage 7: 推送镜像到 Harbor ============
+        // ============ Stage 8: 推送镜像到 Harbor ============
+        // Harbor 凭证是必填项：没配直接失败，不静默跳过
+        // 否则后面部署会用集群里旧的 latest 镜像，掩盖"镜像没推上去"的故障
         stage('Push Image') {
             steps {
                 container('docker') {
                     script {
                         echo "开始推送镜像到 Harbor..."
-                        // 检测 Harbor 凭证是否配置；没配就 echo 跳过（不阻断流水线）
-                        def harborCredOk = false
-                        try {
-                            withCredentials([usernamePassword(
-                                credentialsId: 'harbor-credentials',
-                                usernameVariable: 'HARBOR_USER',
-                                passwordVariable: 'HARBOR_PASS'
-                            )]) {
-                                sh "docker login ${HARBOR_REGISTRY} -u ${HARBOR_USER} -p ${HARBOR_PASS}"
-                                harborCredOk = true
-                            }
-                        } catch (Exception e) {
-                            harborCredOk = false
+                        // 不 try-catch：凭证缺失直接报错，强制运维先把凭证配好
+                        withCredentials([usernamePassword(
+                            credentialsId: 'harbor-credentials',
+                            usernameVariable: 'HARBOR_USER',
+                            passwordVariable: 'HARBOR_PASS'
+                        )]) {
+                            sh "docker login ${HARBOR_REGISTRY} -u ${HARBOR_USER} -p ${HARBOR_PASS}"
                         }
-                        if (harborCredOk) {
-                            sh "docker push ${BACKEND_IMAGE}"
-                            sh "docker push ${FRONTEND_IMAGE}"
-                            sh "docker push ${WEBHOOK_IMAGE}"
-                            echo "✅ 镜像推送完成"
-                        } else {
-                            echo "⚠️ 未配置 Harbor 凭证（harbor-credentials），跳过镜像推送"
-                            echo "   提示：在 Jenkins 里配置 harbor-credentials 凭证（用户名/密码）后即可推送"
-                        }
+                        sh "docker push ${BACKEND_IMAGE}"
+                        sh "docker push ${FRONTEND_IMAGE}"
+                        sh "docker push ${WEBHOOK_IMAGE}"
+                        echo "✅ 镜像推送完成"
                     }
                 }
             }
         }
 
-        // ============ Stage 8: 自动部署 dev/test/perf ============
+        // ============ Stage 9: 自动部署 dev/test/perf ============
         stage('Deploy Dev/Test/Perf') {
             steps {
                 container('kubectl') {
@@ -427,7 +465,7 @@ spec:
             }
         }
 
-        // ============ Stage 9: staging 人工审批 + 飞书通知 ============
+        // ============ Stage 10: staging 人工审批 + 飞书通知 ============
         stage('Deploy Staging') {
             steps {
                 script {
@@ -445,7 +483,7 @@ spec:
             }
         }
 
-        // ============ Stage 10: production 人工审批（最严格）============
+        // ============ Stage 11: production 人工审批（最严格）============
         stage('Deploy Production') {
             steps {
                 script {

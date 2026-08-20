@@ -108,17 +108,23 @@ patches:
         path: /metadata/annotations
         value:
           cert-manager.io/cluster-issuer: letsencrypt-prod
-  # 生产指向云上 RDS/Redis（阿里云内网地址占位）
+  # 生产指向阿里云 RDS/Redis（由 terraform apply 后填入，不再写伪装的 rm-xxx 占位）
+  # 说明：
+  #   - terraform/modules/rds 和 terraform/modules/redis 已 output endpoint（见 terraform/outputs.tf）
+  #   - 部署流程：terraform apply 拿到真实 endpoint → sed 替换这里 → kubectl apply -k
+  #   - 流水线（terraform/Jenkinsfile apply 阶段）会自动把 endpoint 注入到 ConfigMap
   - target:
       kind: ConfigMap
       name: app-config
     patch: |-
       - op: replace
         path: /data/DB_HOST
-        value: rm-xxx-prod.mysql.rds.aliyuncs.com
+        # 由 terraform apply 注入；这里先用合法域名占位（不是 rm-xxx 这种伪装值）
+        value: __RDS_ENDPOINT__    # terraform/Jenkinsfile apply 阶段替换为 rm-xxxx.mysql.rds.aliyuncs.com
       - op: replace
         path: /data/REDIS_HOST
-        value: r-xxx-prod.redis.rds.aliyuncs.com
+        # 由 terraform apply 注入；这里先用合法域名占位
+        value: __REDIS_ENDPOINT__  # terraform/Jenkinsfile apply 阶段替换为 r-xxxx.redis.rds.aliyuncs.com
       - op: replace
         path: /data/OTEL_EXPORTER_OTLP_ENDPOINT
         value: http://otel-collector:4317

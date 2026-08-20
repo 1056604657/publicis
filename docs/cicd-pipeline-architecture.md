@@ -18,6 +18,52 @@
 
 ---
 
+## 二、流水线流程图（业务流水线 11 阶段）
+
+```mermaid
+flowchart TD
+    subgraph CI["CI 阶段（自动通过）"]
+        A["① Checkout\n代码检出"] --> B["② Code Scan\nSonarQube + Quality Gate"]
+        B --> C["③ Unit Test\npytest 单元测试"]
+        C --> D["④ E2E Test\ndocker-compose 三层验证"]
+        D --> E["⑤ Dependency Scan\nOWASP Dependency-Check\nCVSS≥7 直接失败"]
+        E --> F["⑥ Build Image\ndocker build\nbackend / frontend / webhook"]
+        F --> G["⑦ Image Scan\nTrivy 安全扫描\n非 root 镜像检查"]
+        G --> H["⑧ Push Image\n登录 Harbor\n推三个镜像"]
+    end
+
+    subgraph CD_DEV["CD 阶段（自动部署）"]
+        H --> I["⑨ Deploy Dev / Test / Perf\nkubectl apply -k\n无需审批"]
+    end
+
+    subgraph CD_STAGING["CD 阶段（人工审批）"]
+        I --> J["飞书通知审批人"]
+        J --> K["人工 input 审批"]
+        K -- PASS --> L["⑩ Deploy Staging\nkubectl apply -k"]
+        K -- FAIL --> M["终止，通知失败"]
+    end
+
+    subgraph CD_PROD["CD 阶段（最严格）"]
+        L --> N["飞书通知审批人"]
+        N --> O["人工 input 审批\nproduction 二次确认"]
+        O -- PASS --> P["⑪ Deploy Production\nprogressiveDeploy()\nIstio 灰度发布"]
+        O -- FAIL --> Q["终止，通知失败"]
+        P --> R["人工确认全量切换\n或回滚"]
+        R --> S["角色轮换\nblue ←→ green"]
+    end
+
+    I -->|"post: 飞书通知"| T["构建成功/失败通知"]
+    L -->|"post: 飞书通知"| T
+    P -->|"post: 飞书通知"| T
+
+    style CI fill:#e3f2fd,stroke:#1565c0
+    style CD_DEV fill:#e8f5e9,stroke:#2e7d32
+    style CD_STAGING fill:#fff3e0,stroke:#ef6c00
+    style CD_PROD fill:#fce4ec,stroke:#c62828
+```
+
+---
+
 ## 二、Jenkins 部署方式
 
 Jenkins Controller 用 Helm 部署在 K8s 里（`k8s/jenkins/values.yaml`）：

@@ -100,13 +100,17 @@ kubectl apply -k k8s/overlays/dev
 | 差异项 | dev | test | perf | staging | production |
 |--------|-----|------|------|---------|-----------|
 | namespace | marriott-dev | marriott-test | marriott-perf | marriott-staging | marriott-production |
-| 副本数 | 1 | 1 | 3 | 2 | 3 |
-| 镜像 tag | latest | latest | v1 | v1 | v1 |
+| 副本数 | 1 | 1 | 3 | 2 | 0（云资源就绪后改 3） |
+| 镜像 tag | latest-amd64 | latest-amd64 | v1-amd64 | v1-amd64 | v1-amd64 |
 | 镜像拉取策略 | Always | Always | IfNotPresent | IfNotPresent | IfNotPresent |
-| HPA | 无 | 无 | 有 | 有 | 有 |
+| HPA | 无 | 无 | 有 | 有 | 无（0 副本场景删除） |
 | PDB/PriorityClass | 无 | 无 | 有 | 有 | 有 |
 | 数据库 | 集群内 | 集群内 | 集群内 | 云上 RDS | 云上 RDS |
 | Secret 来源 | secretGenerator | secretGenerator | secretGenerator | ESO(KMS) | ESO(KMS) |
+
+> 说明：production 当前 0 副本（云上 RDS/ESO 未就绪，Pod 起来连不上库会 CrashLoop），
+> 所以 production overlay 同时删掉了 HPA（minReplicas=0 需要 Object/External 指标，0 副本场景直接删更干净）。
+> PDB/PriorityClass 保留（云资源就绪后改回副本数即可用）。
 
 ---
 
@@ -120,11 +124,11 @@ kubectl apply -k k8s/overlays/dev
 第 3 步：部署 test 环境
 第 4 步：部署 perf 环境
 第 5 步：部署 webhook（独立 namespace）
-第 6 步：staging / production（只渲染验证，不真部署——依赖云上 RDS + ESO）
+第 6 步：staging / production（production 已部署 0 副本；staging 可部署或只渲染验证）
 第 7 步：部署 Jenkins（K8s 里，先装好备用）
 ```
 
-> 说明：staging/production 需要阿里云 RDS/Redis（云上资源，笔试不真花钱）和 ESO（集群没装），所以**只渲染验证 YAML 正确性，不实际 apply**。面试时说明「代码完整，生产部署依赖云资源已就绪」。
+> 说明：staging/production 需要阿里云 RDS/Redis（云上资源，笔试不真花钱）和 ESO（集群没装）。production 已用 0 副本方式部署全部资源（Pod 不启动，避免连不上云库 CrashLoop）；staging 可以同样方式部署或只渲染验证 YAML。
 
 ---
 
@@ -221,7 +225,11 @@ webhook 是独立的（不在 Kustomize 里，是单独的 yaml 文件）：
 ```bash
 cd /Users/babyyy/工作/marriott-devops
 
-# 部署（自动创建 webhook-system namespace）
+# ① webhook-system 需要自己的镜像拉取凭证（从 default 拷一份，Harbor 认证）
+# 不拷的话 Deployment 会 ImagePullBackOff（pull access denied: no basic auth credentials）
+kubectl get secret swr-secret -n default -o go-template='{{index .data ".dockerconfigjson"}}' | base64 -d | kubectl create secret docker-registry swr-secret -n webhook-system --from-file=.dockerconfigjson=/dev/stdin
+
+# ② 部署（自动创建 webhook-system namespace）
 kubectl apply -f k8s/webhook/webhook.yaml
 
 # 验证
@@ -299,20 +307,22 @@ CI/CD 流水线已经写好，两个 Jenkinsfile：
 | `Jenkinsfile`（根目录） | 业务服务流水线（代码扫描→测试→镜像合规→分级部署） |
 | `terraform/Jenkinsfile` | 基础设施流水线（plan→审批→apply） |
 
-**业务服务流水线的 10 个阶段**：
+**业务服务流水线的 11 个阶段**（与根目录 `Jenkinsfile` 完全一致）：
 
 1. Checkout —— 代码检出
-2. Code Scan —— SonarQube 代码静态扫描
+2. Code Scan —— SonarQube 代码静态扫描 + Quality Gate
 3. Unit Test —— 单元测试 + 覆盖率
-4. Dependency Scan —— 依赖漏洞扫描（Dependency-Check）
-5. Build Image —— 构建三个镜像
-6. Image Scan —— 镜像合规检查（Trivy 高危漏洞 + 非 root）
-7. Push Image —— 推送到 Harbor
-8. Deploy Dev/Test/Perf —— 自动部署
-9. Deploy Staging —— 人工审批 + 飞书通知
-10. Deploy Production —— 二次审批 + **Istio header 灰度**（测试组先验证，通过后全量切换）
+4. E2E Test —— 端到端测试（docker-compose 拉起三层应用，验证健康检查 + 缓存链路）
+5. Dependency Scan —— 依赖漏洞扫描（Dependency-Check，CVSS≥7 失败）
+6. Build Image —— 构建三个镜像（--platform linux/amd64）
+7. Image Scan —— 镜像合规检查（Trivy 高危漏洞 + 非 root）
+8. Push Image —— 推送到 Harbor（commit SHA 8 位 tag）
+9. Deploy Dev/Test/Perf —— 自动部署
+10. Deploy Staging —— 人工审批 + 飞书通知
+11. Deploy Production —— 二次审批 + **Istio header 灰度**（测试组先验证，通过后全量切换 + 角色轮换）
 
-> 说明：完整流水线需要配置 Jenkins 凭证（Harbor、SonarQube、飞书 webhook 等），见 Jenkinsfile 顶部注释。
+> 说明：完整流水线需要配置 Jenkins 凭证（Harbor、SonarQube、飞书 webhook、GitHub push 等），见 Jenkinsfile 顶部注释。
+> 部署阶段会用 `scripts/update-image-tag.py` 把 overlay 的新 tag 结构化更新后部署，并把结果**写回 git**（GitOps 雏形，git 是事实来源）。写回需要 `github-credentials` 凭证和 `GIT_HTTP_PROXY` 环境变量（GitHub 走代理，与集群内 checkout 一致）。
 
 ### 第 9 步：Istio 灰度发布（选做加分项）
 
@@ -532,8 +542,8 @@ spec:
 - 正确设计：**构建时声明一次语言，部署时 webhook 自动识别，用户什么都不用管**——这才是 Mutating Webhook 该干的事
 
 **webhook 的依赖**（部署时注意）：
-- 需要 Harbor 凭证（读镜像 label 用，环境变量 `HARBOR_USERNAME`/`HARBOR_PASSWORD`，只读权限即可）
-- 读不到 label 时安全兜底（返回空，不阻断 Pod 创建）
+- 读镜像 label 需要 Harbor 只读凭证（环境变量 `HARBOR_USERNAME`/`HARBOR_PASSWORD`，代码里已支持）
+- **当前 webhook.yaml 未注入这两个变量**：未配置时 webhook 以匿名请求 Harbor，读不到 label 就跳过 OTel 注入（安全兜底，不阻断 Pod 创建），资源限制和 team 标签照常工作。需要 OTel 自动注入时，在 webhook.yaml 的 env 里补上只读凭证即可
 
 **面试话术**：
 > 「我写了一个 Mutating Webhook，利用 K8s 准入控制机制，在 Pod 创建前自动做三件事：补资源限制、加 team 标签、识别 Python 应用自动加 OTel 注解。识别语言我不是猜镜像名，而是读镜像的 OCI metadata label——构建时 `LABEL language=python` 声明一次，webhook 调 Harbor API 读 label 自动识别，用户部署时无感知。这体现两点：一是理解 admission 机制本质是 HTTP 交互返回 JSON Patch；二是 webhook 的价值在于自动发现，而不是让用户手动打标签。」

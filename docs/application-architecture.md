@@ -138,10 +138,10 @@ Flask/gunicorn /api/items
 | PodDisruptionBudget | `backend-pdb` | minAvailable: 1，保证节点维护时至少 1 个 backend pod 可用 |
 | PodDisruptionBudget | `frontend-pdb` | minAvailable: 1，保证节点维护时至少 1 个 frontend pod 可用 |
 | PriorityClass | `app-priority` | value: 100000，高优先级，资源紧张时优先调度 |
-| Ingress | `app-ingress` | 域名 `perf.app.example.com`，有 cert-manager annotation（selfsigned，自签名） |
+| Ingress | `app-ingress` | 域名 `perf.app.example.com`，无 cert-manager annotation（内网集群无公网入口，证书代码就绪） |
 | Secret | `app-secrets` | `perf_password_123` |
 | NetworkPolicy | 同 dev | 同 dev |
-| 镜像 tag | `latest-amd64` | 保持与 dev/test 一致（latest = 最新构建） |
+| 镜像 tag | `v1-amd64` | perf 用固定版本 tag（与 staging/prod 一致） |
 
 **perf 环境特殊性**：
 - **HPA 弹性扩缩容**：压测时模拟高并发，CPU/内存超过阈值自动扩容至 10 副本，压测结束自动缩回
@@ -211,7 +211,7 @@ staging 的 backend/frontend 连接**阿里云 RDS + Redis**，而不是集群�
 | ExternalSecret | `app-secrets` | 从 KMS 同步 DB_USER / DB_PASSWORD，不在代码中明文存放 |
 | ConfigMap | `app-config` | DB_HOST=__RDS_ENDPOINT__（terraform apply 注入），REDIS_HOST=__REDIS_ENDPOINT__ |
 | Istio Gateway | `marriott-gateway` | `k8s/istio/gateway.yaml` → istio-system（staging/prod 共用） |
-| Istio VirtualService | `backend-route` | `k8s/istio/virtualservice.yaml` → marriott-staging（header 灰度规则已定义但 staging 不执行灰度） |
+| Istio VirtualService | 无 | 灰度只在 production，staging 不部署 VirtualService（`k8s/istio/virtualservice.yaml` 的 namespace 是 marriott-production） |
 
 **staging 环境特殊性**：
 - External Secrets Operator（ESO）从阿里云 KMS 拉取密钥，代码零明文密码——这是生产级密钥管理实践
@@ -265,7 +265,7 @@ Flask → 阿里云 RDS（__RDS_ENDPOINT__）
 | 副本数 | 2（backend + frontend） | **0**（笔试场景云资源未就绪，云上 RDS/ESO 就绪后改为 3） |
 | HPA | 有（2-10） | **删除**（0 副本无意义，云资源就绪后恢复） |
 | Secret | ESO + KMS | ESO + KMS（同 staging） |
-| 镜像 tag | `v1-amd64` | `v1-amd64`（生产用 commit SHA tag，不用 latest） |
+| 镜像 tag | `v1-amd64` | `v1-amd64`（overlay 基线；CI 部署时用 commit SHA tag 写回） |
 | 灰度发布 | 无（全量） | **Istio header 灰度**（X-User-Group: beta 走 v2，其他走 v1） |
 | OTEL | 无（ConfigMap 未配置） | **有**（OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317） |
 
@@ -422,7 +422,7 @@ DestinationRule subset v2 → backend-green pods (version=green)
 | **证书** | selfsigned | selfsigned | selfsigned | letsencrypt-prod | letsencrypt-prod |
 | **Istio sidecar** | 无 | 无 | 无 | 有 | 有 |
 | **灰度发布** | 无 | 无 | 无 | 无 | Istio header 灰度 |
-| **镜像 tag** | latest-amd64 | latest-amd64 | latest-amd64 | v1-amd64 | v1-amd64 |
+| **镜像 tag** | latest-amd64 | latest-amd64 | v1-amd64 | v1-amd64 | v1-amd64 |
 | **NetworkPolicy** | 有 | 有 | 有 | 无（删了） | 无（删了） |
 | **拓扑分布** | 无 | 无 | topologySpread | topologySpread | topologySpread |
 | **OTel** | 无 | 无 | 无 | 无 | 有 |

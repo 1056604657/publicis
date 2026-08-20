@@ -34,7 +34,7 @@ marriott-devops/
 │   ├── jenkins/               # Jenkins 部署 values.yaml
 │   └── istio/                 # Istio 灰度发布（Gateway/VirtualService/DestinationRule）
 ├── terraform/                 # IaC（Task 1）
-│   ├── modules/               # 模块化（vpc/rds/redis/oss/acr）
+│   ├── modules/               # 模块化（vpc/slb/ack/rds/redis/oss/acr，共 7 个）
 │   ├── environments/          # 5 套环境 tfvars
 │   └── Jenkinsfile            # 基础设施流水线（Task 3.1）
 ├── Jenkinsfile                # 业务服务流水线（Task 3.2）
@@ -49,9 +49,9 @@ marriott-devops/
 ## 文档导航
 
 - 📖 **[部署手册](docs/deployment-guide.md)** —— 从零部署到集群的完整操作步骤
-- 🏗 [应用架构设计图](docs/application-architecture.md)
-- ☁️ [基础设施架构设计图](docs/infrastructure-architecture.md)
-- 🔄 [CI/CD 流水线架构设计图](docs/cicd-pipeline-architecture.md)
+- 🏗 [应用架构设计](docs/application-architecture.md)
+- ☁️ [基础设施架构设计](docs/infrastructure-architecture.md)
+- 🔄 [CI/CD 流水线架构设计](docs/cicd-pipeline-architecture.md)
 
 ---
 
@@ -90,7 +90,7 @@ kubectl apply -k k8s/overlays/dev    # 部署 dev 环境
 1. **5 套环境用两套隔离机制**：Terraform workspace（基础设施）+ K8s namespace/overlay（应用）
 2. **不同环境不同资源策略**：dev/test 用集群内轻量 DB，staging/prod 用云上 RDS
 3. **健康检查分离**：`/healthz`（存活）和 `/readyz`（就绪）分开
-4. **镜像 tag 策略**：dev/test 用 latest，perf/staging/prod 用 v1（commit SHA）
+4. **镜像 tag 策略**：CI 流水线用 commit SHA（8 位）做 tag（可追溯）；overlay 基线 dev/test 用 latest-amd64、perf/staging/prod 用 v1-amd64
 5. **分级发布**：dev/test/perf 自动，staging/prod 人工审批
 6. **Mutating Webhook**：资源治理 + 标签规范 + OTel 自动注入联动（读镜像 OCI label 识别 Python，不猜镜像名）
 7. **Secret 分层**：dev/test/perf 用 secretGenerator，staging/prod 用 ESO + KMS

@@ -12,6 +12,9 @@ env/
 # 镜像 tar（体积大，不提交 Git）
 images/*.tar
 
+# hermes verify 本地验证配置
+.hermes/
+
 # IDE
 .idea/
 .vscode/

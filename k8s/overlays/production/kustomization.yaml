@@ -1,5 +1,3 @@
-# production 环境 overlay
-# 生产环境：3 副本、启用 HPA、有 PDB、有 PriorityClass、指向云上 RDS/Redis、cert-manager 正式证书
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -16,8 +14,6 @@ images:
   - name: hub-sh.aijidou.com/base/marriott-frontend
     newTag: v1-amd64
 
-# 生产：副本数设为 0（笔试场景不真跑业务——云上 RDS/ESO 未就绪，连不上库会 CrashLoop）
-# 所有资源（PDB/HPA/Service/Ingress）都完整创建，只是 Pod 不启动，符合「代码就绪待云资源」
 replicas:
   - name: backend
     count: 0
@@ -25,7 +21,6 @@ replicas:
     count: 0
 
 patches:
-  # 删除集群内 PostgreSQL（生产用云上 RDS）
   - target:
       kind: StatefulSet
       name: postgres
@@ -44,7 +39,6 @@ patches:
       kind: Service
       metadata:
         name: postgres
-  # 删除集群内 Redis（生产用云上 Redis）
   - target:
       kind: Deployment
       name: redis
@@ -63,7 +57,6 @@ patches:
       kind: Service
       metadata:
         name: redis
-  # 删除指向集群内 postgres/redis 的 NetworkPolicy（生产用云上，这两个是死策略）
   - target:
       kind: NetworkPolicy
       name: postgres-allow-backend
@@ -82,8 +75,6 @@ patches:
       kind: NetworkPolicy
       metadata:
         name: redis-allow-backend
-  # 删除 HPA（production 0 副本，不需要扩缩容；云资源就绪后改回副本数并恢复 HPA）
-  # 说明：minReplicas=0 需要 Object/External 指标（K8s 限制），0 副本场景直接删 HPA 更干净
   - target:
       kind: HorizontalPodAutoscaler
       name: backend-hpa
@@ -93,7 +84,6 @@ patches:
       kind: HorizontalPodAutoscaler
       metadata:
         name: backend-hpa
-  # Ingress 域名（生产正式域名）+ cert-manager 正式证书
   - target:
       kind: Ingress
       name: app-ingress
@@ -108,11 +98,6 @@ patches:
         path: /metadata/annotations
         value:
           cert-manager.io/cluster-issuer: letsencrypt-prod
-  # 生产指向阿里云 RDS/Redis（由 terraform apply 后填入，不再写伪装的 rm-xxx 占位）
-  # 说明：
-  #   - terraform/modules/rds 和 terraform/modules/redis 已 output endpoint（见 terraform/outputs.tf）
-  #   - 部署流程：terraform apply 拿到真实 endpoint → sed 替换这里 → kubectl apply -k
-  #   - 流水线（terraform/Jenkinsfile apply 阶段）会自动把 endpoint 注入到 ConfigMap
   - target:
       kind: ConfigMap
       name: app-config

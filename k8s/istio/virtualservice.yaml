@@ -1,24 +1,14 @@
-# VirtualService：路由规则（header 灰度核心）
-# 实现「按 header 定向灰度」：
-#   - 请求带 X-User-Group: beta → 路由到 v2（新版）
-#   - 其他请求 → 路由到 v1（旧版）
-#
-# 灰度发布流程（两步）：
-#   1. header 灰度：先部署 v2 新版，带 X-User-Group: beta 的测试组访问 v2，其他走 v1
-#   2. 测试通过后：apply virtualservice-full.yaml 把 100% 流量切到 v2
 apiVersion: networking.istio.io/v1
 kind: VirtualService
 metadata:
   name: backend-route
-  namespace: marriott-production   # 和 backend 服务同 namespace，host 才能解析
+  namespace: marriott-production
 spec:
-  # 挂到外部入口 Gateway（没有这个字段则只在 mesh 内部生效，外部流量进不来）
   gateways:
     - marriott-gateway
   hosts:
     - backend.marriott-production.svc.cluster.local
   http:
-    # 规则 1：header 定向灰度（测试组用户 → 新版 v2）
     - match:
         - headers:
             X-User-Group:
@@ -26,9 +16,8 @@ spec:
       route:
         - destination:
             host: backend.marriott-production.svc.cluster.local
-            subset: v2      # 新版
-    # 规则 2：默认流量 → 旧版 v1
+            subset: v2
     - route:
         - destination:
             host: backend.marriott-production.svc.cluster.local
-            subset: v1      # 旧版
+            subset: v1

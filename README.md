@@ -1,4 +1,4 @@
-# Marriott 高级 DevOps 工程师测试项目
+# DevOps 工程师面试考题
 
 > 三层 Hello-World 应用，从基础设施到 K8s 部署到 CI/CD 流水线的完整交付，覆盖 5 套环境（dev/test/perf/staging/production）。
 
@@ -6,9 +6,10 @@
 
 ## 项目概览
 
-这是一个「代码即一切（Everything as Code）」的完整示例项目，演示多层架构应用的完整 DevOps 生命周期。
+示例项目，演示多层架构应用的完整 DevOps 生命周期。
 
 **技术栈**：
+
 - 应用：Python Flask + Nginx + PostgreSQL + Redis
 - 基础设施：Terraform（阿里云）
 - 编排：Kubernetes + Kustomize + cert-manager + Mutating Webhook + External Secrets
@@ -32,7 +33,7 @@ marriott-devops/
 │   ├── webhook/               # Webhook 部署资源
 │   ├── cert-manager/          # ClusterIssuer 定义
 │   ├── jenkins/               # Jenkins 部署 values.yaml
-│   └── istio/                 # Istio 灰度发布（Gateway/VirtualService/DestinationRule）
+│   └── istio/                 # Istio 灰度 + TLS 证书（Gateway/VirtualService/DestinationRule/certificate/acme-gateway）
 ├── terraform/                 # IaC（Task 1）
 │   ├── modules/               # 模块化（vpc/slb/ack/rds/redis/oss/acr，共 7 个）
 │   ├── environments/          # 5 套环境 tfvars
@@ -46,6 +47,8 @@ marriott-devops/
 
 ---
 
+
+
 ## 文档导航
 
 - 📖 **[部署手册](docs/deployment-guide.md)** —— 从零部署到集群的完整操作步骤
@@ -55,19 +58,27 @@ marriott-devops/
 
 ---
 
+
+
 ## 5 套环境
 
-| 环境 | 用途 | K8s namespace | Terraform workspace |
-|------|------|---------------|---------------------|
-| dev | 开发 | marriott-dev | dev |
-| test | QA 测试 | marriott-test | test |
-| perf | 性能压测 | marriott-perf | perf |
-| staging | 预发布/UAT | marriott-staging | staging |
-| production | 生产 | marriott-production | production |
+
+| 环境         | 用途      | K8s namespace       | Terraform workspace |
+| ---------- | ------- | ------------------- | ------------------- |
+| dev        | 开发      | marriott-dev        | dev                 |
+| test       | QA 测试   | marriott-test       | test                |
+| perf       | 性能压测    | marriott-perf       | perf                |
+| staging    | 预发布/UAT | marriott-staging    | staging             |
+| production | 生产      | marriott-production | production          |
+
 
 ---
 
+
+
 ## 快速开始
+
+
 
 ### 本地验证（docker-compose）
 
@@ -75,6 +86,8 @@ marriott-devops/
 docker-compose up -d
 curl http://localhost:8080/healthz
 ```
+
+
 
 ### 部署到集群（详见部署手册）
 
@@ -85,6 +98,8 @@ kubectl apply -k k8s/overlays/dev    # 部署 dev 环境
 
 ---
 
+
+
 ## 关键设计决策
 
 1. **5 套环境用两套隔离机制**：Terraform workspace（基础设施）+ K8s namespace/overlay（应用）
@@ -94,3 +109,4 @@ kubectl apply -k k8s/overlays/dev    # 部署 dev 环境
 5. **分级发布**：dev/test/perf 自动，staging/prod 人工审批
 6. **Mutating Webhook**：资源治理 + 标签规范 + OTel 自动注入联动（读镜像 OCI label 识别 Python，不猜镜像名）
 7. **Secret 分层**：dev/test/perf 用 secretGenerator，staging/prod 用 ESO + KMS
+

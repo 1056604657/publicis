@@ -1,11 +1,3 @@
-# NetworkPolicy：网络隔离（安全基线）
-# 默认拒绝 + 白名单模型：
-#   1. PostgreSQL 只允许 backend 访问（5432）
-#   2. Redis 只允许 backend 访问（6379）
-#   3. backend 只允许 frontend 和 ingress-controller 访问（8080）
-#
-# 说明：这些策略只对「集群内」的 DB/Redis 生效（dev/test/perf 环境）。
-# staging/production 的数据库在云上 RDS，用阿里云 RDS 白名单限制（见 terraform）。
 
 # 1. PostgreSQL 只允许 backend 访问
 apiVersion: networking.k8s.io/v1

@@ -331,8 +331,13 @@ CI/CD 流水线已经写好，两个 Jenkinsfile：
 ```bash
 cd /Users/babyyy/工作/marriott-devops
 
+# 0. 证书链（一次性）：ClusterIssuer + 挑战专用 Gateway + 生产证书（方案 A：TLS 终止在 Gateway）
+kubectl apply -f k8s/cert-manager/letsencrypt-prod.yaml  # ClusterIssuer（集群级）
+kubectl apply -f k8s/istio/acme-gateway.yaml             # Gateway API 挑战入口（istio-system）
+kubectl apply -f k8s/istio/certificate.yaml              # Certificate marriott-tls（istio-system）
+
 # 1. Istio 三件套（namespace 已写在 yaml 文件里，直接 apply 即可）
-kubectl apply -f k8s/istio/gateway.yaml           # → istio-system（和 ingressgateway 同 ns）
+kubectl apply -f k8s/istio/gateway.yaml           # → istio-system（和 ingressgateway 同 ns，80 + 443 TLS）
 kubectl apply -f k8s/istio/destinationrule.yaml   # → marriott-production（和 backend 同 ns）
 kubectl apply -f k8s/istio/virtualservice.yaml    # → marriott-production（header 灰度版）
 
@@ -340,6 +345,8 @@ kubectl apply -f k8s/istio/virtualservice.yaml    # → marriott-production（he
 kubectl get gateways.networking.istio.io -n istio-system        # marriott-gateway
 kubectl get virtualservices.networking.istio.io -n marriott-production   # backend-route
 kubectl get destinationrules.networking.istio.io -n marriott-production  # backend-destination
+kubectl get gateway -n istio-system                              # acme-challenge（Gateway API）
+kubectl get certificate -n istio-system                          # marriott-tls（内网无公网入口，Pending 属正常）
 
 # 3. 灰度发布流程（Jenkins 自动做，手动演示时）
 #    a. 部署 green 新版（version: green 标签）
@@ -596,23 +603,33 @@ spec:
 - cert-manager 用 ACME 协议全自动：申请 → 验证 → 签发 → 续期，零手工
 - `letsencrypt-prod` 里的 prod 指「正式签发环境」（区别于测试用 staging 环境），不是付费
 
-**关键认知 2：HTTP-01 挑战为什么不用 ingress-nginx**
+**关键认知 2：HTTP-01 挑战走 Gateway API，不用 ingress-nginx（已实现）**
 
-集群没有 ingress-nginx（只有 Istio + Kong），但证书签发**不一定需要 nginx**：
+集群没有 ingress-nginx（只有 Istio + Kong），证书挑战不需要 nginx：
 
 ```
-cert-manager 支持 Gateway API solver（v1.21+）
+cert-manager 支持 Gateway API solver（v1.21.1 已装，支持）
     ↓
-集群里 Istio 已注册为 Gateway API 实现者（gateway-controller，ACCEPTED=True）
+集群里 Istio 已注册为 Gateway API 实现者（GatewayClass istio，ACCEPTED=True）
     ↓
-所以：有公网入口后，cert-manager 创建 HTTPRoute，Istio 网关响应 ACME 挑战
+letsencrypt-prod 的 solver 配成 gatewayHTTPRoute（parentRefs → acme-challenge Gateway）
+    ↓
+挑战时 cert-manager 创建 HTTPRoute，Istio ingressgateway 响应 ACME 挑战
     ↓
 不需要再装 ingress-nginx（避免 80/443 端口冲突 + 重复造轮子）
 ```
 
+对应代码（方案 A：TLS 终止在 Istio Gateway）：
+| 文件 | 作用 |
+|------|------|
+| `k8s/istio/gateway.yaml` | 443 HTTPS 段，`credentialName: marriott-tls`（TLS 在 Gateway 终止） |
+| `k8s/istio/certificate.yaml` | Certificate（istio-system）→ letsencrypt-prod 签发 |
+| `k8s/istio/acme-gateway.yaml` | Gateway API Gateway（className: istio，80 端口），HTTP-01 挑战专用 |
+| `k8s/cert-manager/letsencrypt-prod.yaml` | ClusterIssuer，solver = gatewayHTTPRoute（替代 ingress class nginx） |
+
 **关键认知 3：为什么现在签不出证书（内网集群限制）**
 
-这是内网集群，`istio-ingressgateway` 是 LoadBalancer 类型但 `EXTERNAL-IP = <pending>`（没有公网 IP）。Let's Encrypt 从公网访问不到域名，所以无论用 nginx 还是 Istio 都签不出证书——**这是物理限制，不是配置问题**。
+这是内网集群，`istio-ingressgateway` 是 LoadBalancer 类型但 `EXTERNAL-IP = <pending>`（没有公网 IP）。Let's Encrypt 从公网访问不到域名，所以无论用 nginx 还是 Istio 都签不出证书——**这是物理限制，不是配置问题**。当前 Certificate `marriott-tls` 已 apply（istio-system），状态 Issuing 挂起；公网 LB 就位后 cert-manager 自动完成挑战并续期，无需人工干预。
 
 **面试话术**：
 > 「证书签发我用 cert-manager，分两层：webhook 用自签名证书（集群内部通信，自签名 + 注入 CA 就够），staging/prod 域名用 Let's Encrypt 正式证书（公网服务要浏览器信任）。HTTP-01 挑战这块，我集群有 Istio 且已注册为 Gateway API 实现者，所以不需要装 ingress-nginx——cert-manager 走 Gateway API solver，Istio 网关响应挑战。这是内网集群没有公网入口，所以域名证书是『代码就绪、待公网 LB』状态，符合题目『网络假设已就绪』的设定。生产公网就绪后，整条链路全自动签发和续期。」

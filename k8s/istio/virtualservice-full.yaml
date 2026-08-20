@@ -1,12 +1,9 @@
-# VirtualService：灰度完成 —— 100% 流量切到新版
-# 灰度放量最后一步：全部流量走 v2（新版），旧版 v1 保留作回滚点
 apiVersion: networking.istio.io/v1
 kind: VirtualService
 metadata:
   name: backend-route
-  namespace: marriott-production   # 和 backend 服务同 namespace，host 才能解析
+  namespace: marriott-production
 spec:
-  # 挂到外部入口 Gateway
   gateways:
     - marriott-gateway
   hosts:
@@ -15,5 +12,5 @@ spec:
     - route:
         - destination:
             host: backend.marriott-production.svc.cluster.local
-            subset: v2      # 新版，100% 流量
+            subset: v2
           weight: 100

@@ -1,19 +1,14 @@
-# DestinationRule：定义后端服务的「版本」（subset）
-# 这是灰度发布的基础——先把同一个 Service 拆成 v1（旧版）和 v2（新版）两个子集
-#
-# 关键概念：subset 就是「版本」。这里 v1 对应旧版 Pod（version=blue 标签），
-# v2 对应新版 Pod（version=green 标签），流量在 VirtualService 里按规则分发到不同 subset。
 apiVersion: networking.istio.io/v1
 kind: DestinationRule
 metadata:
   name: backend-destination
-  namespace: marriott-production   # 和 backend 服务同 namespace，host 才能解析
+  namespace: marriott-production
 spec:
   host: backend.marriott-production.svc.cluster.local
   subsets:
-    - name: v1        # 旧版（蓝）
+    - name: v1
       labels:
         version: blue
-    - name: v2        # 新版（绿）
+    - name: v2
       labels:
         version: green

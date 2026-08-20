@@ -1,21 +1,26 @@
 # Istio Gateway：集群入口网关
 # 之前集群没有 ingress-nginx，但装了 Istio，所以用 Istio Gateway 作为入口
-# 替代 K8s 原生 Ingress 的角色
-#
-# 说明：这是灰度发布的入口层。Gateway 只负责「接收外部流量」，
-# 具体路由到哪个版本，由 VirtualService 决定（见 virtualservice.yaml）。
 apiVersion: networking.istio.io/v1
 kind: Gateway
 metadata:
   name: marriott-gateway
-  namespace: istio-system   # 和 ingressgateway 同 namespace（selector 才能匹配到它）
+  namespace: istio-system
 spec:
   selector:
-    istio: ingressgateway   # 使用 istio-system 里已部署的 ingressgateway
+    istio: ingressgateway
   servers:
     - port:
         number: 80
         name: http
         protocol: HTTP
       hosts:
-        - "*"   # 生产可改成具体域名，如 app.marriott.com
+        - "*"
+    - port:
+        number: 443
+        name: https
+        protocol: HTTPS
+      tls:
+        mode: SIMPLE
+        credentialName: marriott-tls
+      hosts:
+        - "app.marriott.com"

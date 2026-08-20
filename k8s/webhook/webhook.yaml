@@ -1,20 +1,15 @@
-# Mutating Webhook 部署资源（k8s/webhook/ 目录）
-# 包含：namespace、Deployment、Service、cert-manager 证书、MutatingWebhookConfiguration
 
-# 1. webhook 专用 namespace
 apiVersion: v1
 kind: Namespace
 metadata:
   name: webhook-system
 ---
-# 1.5 webhook 专用 ServiceAccount（不与业务 SA 混用）
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: mutate-webhook
   namespace: webhook-system
 ---
-# 2. webhook Deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -23,7 +18,7 @@ metadata:
   labels:
     app: mutate-webhook
 spec:
-  replicas: 2  # 高可用，webhook 挂了会阻塞 Pod 创建
+  replicas: 2 
   selector:
     matchLabels:
       app: mutate-webhook
@@ -32,19 +27,15 @@ spec:
       labels:
         app: mutate-webhook
     spec:
-      # 拉内网 Harbor 镜像凭证（webhook-system namespace 需要先创建 swr-secret）
       imagePullSecrets:
         - name: swr-secret
-      # 用独立 ServiceAccount（不与业务 SA 混用，最小权限）
       serviceAccountName: mutate-webhook
-      # webhook 是基础设施组件，给中等优先级（高于 default Job/Deployments）
       priorityClassName: system-cluster-critical
       containers:
         - name: webhook
           image: hub-sh.aijidou.com/base/marriott-webhook:v1-amd64
           ports:
             - containerPort: 8443
-          # 挂载 cert-manager 签发的证书
           volumeMounts:
             - name: cert
               mountPath: /certs
@@ -54,7 +45,6 @@ spec:
               value: "500m"
             - name: DEFAULT_MEM_LIMIT
               value: "512Mi"
-          # 非 root 运行（镜像里已声明 USER，集群 PSA 强制）
           securityContext:
             runAsNonRoot: true
             runAsUser: 1000
@@ -92,7 +82,6 @@ spec:
           secret:
             secretName: webhook-tls
 ---
-# 3. webhook Service（供 apiserver 调用）
 apiVersion: v1
 kind: Service
 metadata:
@@ -105,7 +94,6 @@ spec:
     - port: 443
       targetPort: 8443
 ---
-# 4. cert-manager 证书（自动签发 TLS）
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -120,7 +108,6 @@ spec:
     kind: Issuer
     name: webhook-selfsigned
 ---
-# 5. cert-manager Issuer（自签名，webhook 场景标准做法）
 apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:
@@ -129,13 +116,11 @@ metadata:
 spec:
   selfSigned: {}
 ---
-# 6. MutatingWebhookConfiguration（注册到 apiserver）
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
   name: mutate-webhook
   annotations:
-    # cert-manager 自动注入 CA 证书
     cert-manager.io/inject-ca-from: webhook-system/webhook-tls
 webhooks:
   - name: mutate.webhook.example.com
@@ -144,15 +129,13 @@ webhooks:
         name: mutate-webhook
         namespace: webhook-system
         path: /mutate
-      caBundle: ""  # cert-manager 自动注入
+      caBundle: ""
     rules:
       - operations: ["CREATE"]
         apiGroups: [""]
         apiVersions: ["v1"]
         resources: ["pods"]
     namespaceSelector:
-      # 只对生产/预发布/压测环境生效（环境隔离：不同环境不同 namespace）
-      # dev/test 不受影响，开发者可以快速试错，不被强制注入
       matchExpressions:
         - key: kubernetes.io/metadata.name
           operator: In
@@ -162,4 +145,4 @@ webhooks:
             - marriott-perf
     admissionReviewVersions: ["v1"]
     sideEffects: None
-    failurePolicy: Ignore  # webhook 挂了不阻塞 Pod 创建
+    failurePolicy: Ignore 

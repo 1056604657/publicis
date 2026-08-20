@@ -1,0 +1,85 @@
+sr-devops-engineer-test.md
+Marriott Confidential. For intended recipients only.
+Test for Sr.DevOps Engineer
+As a senior DevOps engineer, a lot of skills and experience are required. Here in this
+test we mainly focus on the following three areas:
+Infrastructure
+Kubernetes/Container
+Pipeline/Automation
+But there're definitely more to this role, be prepared for the challenge!
+Note, we do things as code, please track progress properly in git with commits and
+commit messages.
+Task 0: Project Codebase
+Pick an open-source project of your choice with multi-tier architecture.
+Alternatively, create or imagine a hello-world project yourself with multi-tier
+architecture.
+Task 1: Infrastructure as Code
+Tech Stack (Required): Terraform and its ecosystem.
+Cloud Providers (Preferred): Alicloud and/or AWS.
+Provision the infrastructure for the project outlined in Task 0, it should include the
+following items, (and everything else needed):
+Networking (optional, assuming it's already in place)
+VPC
+Load Balancer
+Computing (optional, assuming it's already in place)
+Kubernetes
+Data Store, one or more of
+Relational Database
+NoSQL
+Redis
+S3/OSS
+Container Registry (optional, if using public registry)
+The project will be deployed to 5 environments: dev, test, perf, staging and
+production.
+Dev and test are used by development and internal QA testing respectively; Perf is
+used for performance testing; Staging can be used for integration with
+internal/external teams and UAT.
+Optional, for perf, staging and production, this should be a multi-region deployment.
+Optional, multi cloud can be used in different environments or regions. This is for
+better disaster recovery and also to showcase knowledge on multiple cloud providers.
+Task 2: Kubernetes
+For the project outlined in Task 0, prepare related kubernets manifests to deploy
+them, inlcudes at least
+Deployments
+Service
+Ingress
+And includes one or more of the following if appropriate
+HPA
+cert-manager
+Feel free to include anything needed to make life with kubernetes easier.
+Note that the same set of services needs to be deployed into multiple environments
+(dev, test, perf, staging and production).
+Task 3: Pipeline as Code
+Tech Stack (Preferred): Harness CI/CD.
+Tech Stack (Accepted): All other CI/CD platforms/solutions are accepted as well.
+Task 3.1: Optional, Infra Pipeline
+For infra outlined in Task 1, prepare a pipeline to deploy the infra. Split the pipeline
+into multiple stages/steps, for example, one stage/step for test/plan/approval/apply.
+Task 3.2: Required, Service Pipeline
+For the project outlined in Task 0, prepare a CI/CD pipeline to build the image(s), and
+deploy them to the environment provisioned in Task 1 and Task 2.
+Optional, for image build, integrate code quality scan, security scan, unit test, e2e
+test, etc. where appropriate;
+Optional, for deployment, integrate strategy like blue/green deployment, or canary
+deployment, and auto rollback where appropriate.
+Task 4: Documentation as Code
+For each and every project, we need documentation to pass on the knowledge and
+give others high-level overview of the project and design. So please prepare the
+following documents/diagrams:
+Application design/diagram for the project;
+Infrastructure design/diagram for the project;
+Pipeline design/diagram for the project.
+Tips: For platforms that have visualization of the infra/pipeline/etc. on its platform,
+that can be used as well.
+Deliverables
+Required: For code, deliver all tasks with one or more git repos, either as public
+repo(s) on the Internet, or as git archive(s); and send the links/attachments over
+email.
+Optional: For service deployed, share the public link, or share screenshots.
+Optional: For Terraform, if Terraform Cloud is used, share access to the
+organization in Terraform Cloud, or share screenshots.
+Optional: For pipelines, share access to the platform, or share screenshots.
+Notes
+The test should be done within one week upon receipt.
+If you have limited time for the test, do the tasks that can best showcase your skills.
+Don't hesitate to reach out to me if you have any doubts on the test requirements.

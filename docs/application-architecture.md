@@ -280,9 +280,11 @@ Flask → 阿里云 RDS（__RDS_ENDPOINT__）
 | Ingress | `app-ingress` | 域名 `app.marriott.com`，cert-manager → `letsencrypt-prod` |
 | SecretStore + ExternalSecret | 同 staging | 同 staging |
 | ConfigMap | `app-config` | DB_HOST=__RDS_ENDPOINT__，REDIS_HOST=__REDIS_ENDPOINT__，OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 |
-| Istio Gateway | `marriott-gateway` | → istio-system |
+| Istio Gateway | `marriott-gateway` | → istio-system，端口 80 + **443（TLS 终止，credentialName: marriott-tls）** |
 | Istio VirtualService | `backend-route` | → marriott-production，**header 灰度规则** |
 | Istio DestinationRule | `backend-destination` | 定义 v1（version: blue）和 v2（version: green）两个 subset |
+| TLS 证书 | `k8s/istio/certificate.yaml` | Certificate（istio-system）→ letsencrypt-prod 签发，secret: marriott-tls |
+| 证书挑战入口 | `k8s/istio/acme-gateway.yaml` | Gateway API Gateway（className: istio），HTTP-01 挑战专用（80 端口） |
 | 其他 RBAC / NetworkPolicy / ServiceAccount | 同 staging | 同 staging |
 
 **production 环境特殊性**：
@@ -299,10 +301,12 @@ Flask → 阿里云 RDS（__RDS_ENDPOINT__）
 
 | 资源 | 代码位置 | 作用 |
 |------|---------|------|
-| Gateway | `k8s/istio/gateway.yaml` | 入口网关，绑定 istio-system 的 ingressgateway（端口 80），定义允许的 host |
+| Gateway | `k8s/istio/gateway.yaml` | 入口网关，绑定 istio-system 的 ingressgateway。端口 80（HTTP）+ 443（HTTPS，TLS 终止，credentialName: marriott-tls） |
 | DestinationRule | `k8s/istio/destinationrule.yaml` | 定义 subset：v1 = version:blue（旧版），v2 = version:green（新版） |
 | VirtualService | `k8s/istio/virtualservice.yaml` | 按 header 路由：X-User-Group:beta → v2，其他 → v1 |
 | VirtualService（全量版） | `k8s/istio/virtualservice-full.yaml` | 灰度完成后，100% 流量切 v2 |
+| TLS 证书 | `k8s/istio/certificate.yaml` | Certificate → letsencrypt-prod ClusterIssuer，签发到 istio-system 的 marriott-tls secret |
+| 证书挑战入口 | `k8s/istio/acme-gateway.yaml` | Gateway API Gateway（className: istio，80 端口），cert-manager HTTP-01 挑战专用 |
 
 ### 3.2 灰度发布完整流程
 
@@ -559,7 +563,7 @@ Flask/gunicorn Pod（监听 8080）
 | test | port-forward（调试用） | 无 | 集群内 |
 | perf | DNS + Ingress | Ingress（selfsigned） | 集群内 |
 | staging | DNS + Ingress | Ingress（letsencrypt-prod） | 阿里云 RDS/Redis |
-| production | DNS + Istio Gateway | Istio Gateway（letsencrypt-prod） | 阿里云 RDS/Redis |
+| production | DNS + Istio Gateway | **Istio Gateway 443**（TLS 终止，marriott-tls，letsencrypt-prod 签发） | 阿里云 RDS/Redis |
 
 > 说明：集群没有 ingress-nginx controller（只有 Istio + Kong），dev/test 环境用 port-forward 调试，perf/staging 用 Ingress 资源（代码就绪），production 用 Istio Gateway 作为实际入口。
 

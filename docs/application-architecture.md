@@ -21,7 +21,71 @@
 
 ---
 
-## 二、每套环境部署的 K8s 资源清单
+## 二、架构总览图
+
+```mermaid
+flowchart LR
+    subgraph 用户层["用户层"]
+        U[浏览器用户]
+    end
+
+    subgraph 入口层["入口层"]
+        GW[Istio Gateway<br/>istio-system:80]
+        ING[K8s Ingress<br/>代码就绪<br/>集群无 nginx controller]
+    end
+
+    subgraph 前端层["前端层"]
+        FSVC[frontend Service<br/>ClusterIP 80→8080]
+        NGX[Nginx unprivileged<br/>8080 非 root<br/>/healthz /api 反代]
+    end
+
+    subgraph 后端层["后端层"]
+        BSVC[backend Service<br/>ClusterIP 8080]
+        FLASK[Flask + gunicorn<br/>2w4t /healthz /readyz<br/>OTel SDK 埋点]
+    end
+
+    subgraph 数据层["数据层"]
+        PG[(PostgreSQL 15<br/>StatefulSet + Headless<br/>init.sql 建 items 表)]
+        RD[(Redis 7<br/>Deployment<br/>items:list 缓存 60s)]
+    end
+
+    subgraph 平台治理["平台治理"]
+        WH[Mutating Webhook<br/>HTTPS 8443<br/>cert-manager 证书]
+        OTEL[OTel Operator<br/>按注解注入 agent<br/>OTLP 4317 汇聚]
+        HPA[HPA 2-10 副本<br/>CPU 70% / Mem 80%<br/>缩容冷却 5min]
+        PDB[PDB minAvailable 1<br/>PriorityClass 100000<br/>NetworkPolicy 白名单]
+    end
+
+    subgraph 镜像仓库["镜像仓库"]
+        HV[Harbor<br/>hub-sh.aijianou.com<br/>OCI label 识别语言]
+    end
+
+    U -->|"DNS → 80"| GW
+    U -.->|"域名解析 资源存在"| ING
+    GW --> BSVC
+    ING -.-> FSVC
+    FSVC --> NGX
+    NGX -->|"/api 反代"| BSVC
+    BSVC --> FLASK
+    FLASK -->|① 查缓存| RD
+    FLASK -->|② miss 查库| PG
+    FLASK -->|③ 写回缓存| RD
+    FLASK -->|OTLP span| OTEL
+    WH -.->|"读 OCI label\nlanguage=python"| HV
+    FLASK -.->|"拉镜像"| HV
+
+    style 用户层 fill:#e1f5fe,stroke:#0277bd
+    style 入口层 fill:#ede7f6,stroke:#6a1b9a
+    style 前端层 fill:#e3f2fd,stroke:#1565c0
+    style 后端层 fill:#e8f5e9,stroke:#2e7d32
+    style 数据层 fill:#fff3e0,stroke:#ef6c00
+    style 平台治理 fill:#f3e5f5,stroke:#6a1b9a
+    style 镜像仓库 fill:#eceff1,stroke:#546e7a
+```
+
+---
+
+## 三、每套环境部署的 K8s 资源清单
 
 五套环境共用 `k8s/base/` 下的基础资源，通过 `k8s/overlays/<env>/` 做差异化覆盖。
 
@@ -295,7 +359,7 @@ Flask → 阿里云 RDS（__RDS_ENDPOINT__）
 
 ---
 
-## 三、生产环境 Istio 灰度发布（production 独有）
+## 四、生产环境 Istio 灰度发布（production 独有）
 
 ### 3.1 灰度发布三件套
 
@@ -411,7 +475,7 @@ DestinationRule subset v2 → backend-green pods (version=green)
 
 ---
 
-## 四、环境横向对比
+## 五、环境横向对比
 
 | 项目 | dev | test | perf | staging | production |
 |------|-----|------|------|---------|------------|
@@ -435,7 +499,7 @@ DestinationRule subset v2 → backend-green pods (version=green)
 
 ---
 
-## 五、平台治理（所有环境通用）
+## 六、平台治理（所有环境通用）
 
 以下 K8s 资源在 dev/test 环境通过 overlay patch 移除，在 perf/staging/production 环境保留：
 
@@ -512,7 +576,7 @@ backend 和 frontend 的 Pod template 包含 `topologySpreadConstraints`：
 
 ---
 
-## 六、流量总览（从用户请求到数据层）
+## 七、流量总览（从用户请求到数据层）
 
 ### 通用流量路径（所有环境相同部分）
 
@@ -569,7 +633,7 @@ Flask/gunicorn Pod（监听 8080）
 
 ---
 
-## 七、与代码的对应关系
+## 八、与代码的对应关系
 
 每一条 K8s 资源都能在代码目录找到对应文件：
 

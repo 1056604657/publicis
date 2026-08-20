@@ -101,6 +101,35 @@ def readyz():
 
 
 # ---- 业务接口：商品列表 ----
+@app.route("/")
+def index():
+    """根路径：返回一个简单的服务信息页，方便浏览器直接访问确认服务存活"""
+    return """
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Marriott Backend API</title>
+    <style>
+        body { font-family: -apple-system, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; }
+        h1 { color: #333; }
+        a { color: #4CAF50; text-decoration: none; }
+        li { margin: 8px 0; }
+    </style>
+</head>
+<body>
+    <h1>Marriott Backend API</h1>
+    <p>三层应用后端服务，提供以下接口：</p>
+    <ul>
+        <li><a href="/healthz">/healthz</a> —— 存活探针</li>
+        <li><a href="/readyz">/readyz</a> —— 就绪探针（检查 DB / Redis 连通）</li>
+        <li><a href="/api/items">/api/items</a> —— 商品列表（GET / POST）</li>
+    </ul>
+</body>
+</html>
+"""
+
+
 @app.route("/api/items", methods=["GET"])
 def list_items():
     """查询商品列表：先查 Redis 缓存，miss 则查 PostgreSQL 并写回缓存"""

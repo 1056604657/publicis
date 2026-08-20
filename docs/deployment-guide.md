@@ -102,6 +102,7 @@ kubectl apply -k k8s/overlays/dev
 | namespace | marriott-dev | marriott-test | marriott-perf | marriott-staging | marriott-production |
 | 副本数 | 1 | 1 | 3 | 2 | 3 |
 | 镜像 tag | latest | latest | v1 | v1 | v1 |
+| 镜像拉取策略 | Always | Always | IfNotPresent | IfNotPresent | IfNotPresent |
 | HPA | 无 | 无 | 有 | 有 | 有 |
 | PDB/PriorityClass | 无 | 无 | 有 | 有 | 有 |
 | 数据库 | 集群内 | 集群内 | 集群内 | 云上 RDS | 云上 RDS |
@@ -634,7 +635,15 @@ kubectl describe pod <pod名> -n marriott-dev | grep -A5 Events
 
 **解决**：所有镜像已经用 `--platform linux/amd64` 重推了，tag 带 `-amd64` 后缀。如果还报错，确认镜像 tag 是 `-amd64` 结尾。
 
-### 5.3 Pod 起不来（CrashLoopBackOff）
+### 5.3 改了代码重新部署，但 Pod 还是旧代码
+
+**现象**：重新 `docker push` 相同 tag（如 `latest-amd64`）覆盖后，`kubectl rollout restart` 或 `kubectl apply` 触发重建，Pod 跑的还是旧代码。
+
+**原因**：节点 containerd 缓存了旧镜像。默认 `imagePullPolicy: IfNotPresent` 表示「本地有该 tag 就不拉」，所以相同 tag 的新镜像不会被拉取。
+
+**解决**：dev/test 环境在 overlay 里把 `imagePullPolicy` 改成 `Always`（强制每次拉最新，正好配合 latest tag 快速迭代）；perf/staging/prod 用固定 v1 tag + IfNotPresent，发版换新 tag 即可。改完用 `kubectl get pod -o jsonpath='{.status.containerStatuses[0].imageID}'` 确认 Pod 用的是新 digest（sha256 变了才是新镜像）。
+
+### 5.4 Pod 起不来（CrashLoopBackOff）
 
 **现象**：backend Pod 反复重启。
 
@@ -647,7 +656,7 @@ kubectl logs <pod名> -n marriott-dev
 
 **排查顺序**：先看 postgres 和 redis 是否 Running，再看 backend 日志。
 
-### 5.4 就绪探针一直失败（readyz 返回 503）
+### 5.5 就绪探针一直失败（readyz 返回 503）
 
 **现象**：Pod 是 Running，但 READY 列是 0/1。
 
@@ -660,7 +669,7 @@ kubectl logs <pod名> -n marriott-dev   # 看是不是 database_unreachable 或 
 
 **解决**：等 postgres 和 redis 先 Running，backend 就绪探针自然通过。
 
-### 5.5 Pod 创建失败（FailedCreate: no PriorityClass found）
+### 5.6 Pod 创建失败（FailedCreate: no PriorityClass found）
 
 **现象**：`kubectl get pods` 看不到 Pod，`kubectl describe deploy` 里 Events 报：
 
@@ -676,7 +685,7 @@ Error creating: pods "xxx-" is forbidden: no PriorityClass with name app-priorit
 kubectl kustomize k8s/overlays/dev | grep priorityClassName   # 应该没有输出
 ```
 
-### 5.6 删除环境重来
+### 5.7 删除环境重来
 
 ```bash
 kubectl delete -k k8s/overlays/dev   # 删除 dev 环境所有资源

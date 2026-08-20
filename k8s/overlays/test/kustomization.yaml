@@ -77,6 +77,21 @@ patches:
     patch: |-
       - op: remove
         path: /spec/template/spec/priorityClassName
+  # 强制每次重启都拉最新镜像（节点 containerd 会缓存旧镜像，IfNotPresent 不重拉）
+  - target:
+      kind: Deployment
+      name: backend
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Always
+  - target:
+      kind: Deployment
+      name: frontend
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Always
   - target:
       kind: Ingress
       name: app-ingress
